@@ -31,6 +31,10 @@
 
 enum { CONTROL = 10, QUEUE = 64 };
 
+/* the route guidance display's component identifier: 1 as car-tested wired (F07, iOS 27.0.1); wireless 2, as 1 is the
+ * wireless CarPlay transport there */
+#define ROUTE_GUIDANCE_ID(cp) ((cp)->wireless ? 2u : 1u)
+
 struct link {
     const struct iap2_io* io;
     const struct iap2_carplay* cp;
@@ -259,6 +263,17 @@ static int send_identification(struct link* l)
     gn = prm_str(g, gn, 1, "Media Playback Remote");
     gn = prm_u8(g, gn, 2, 1);
     at = prm(b, at, 18, g, gn);
+    /* A route guidance display (iOS 27.0.1, F07, 2026-11-24): without one in the identification the iPhone accepts
+     * 5200 but never sends 5201 / 5202. Group 30: 0 identifier, 1 name, 2..5 the longest road / destination /
+     * road-after / description text, 6 how many manoeuvres it keeps. */
+    gn = prm_u16(g, 0, 0, ROUTE_GUIDANCE_ID(cp));
+    gn = prm_str(g, gn, 1, "Instrument Cluster");
+    gn = prm_u16(g, gn, 2, 64);
+    gn = prm_u16(g, gn, 3, 64);
+    gn = prm_u16(g, gn, 4, 64);
+    gn = prm_u16(g, gn, 5, 64);
+    gn = prm_u16(g, gn, 6, 8);
+    at = prm(b, at, 30, g, gn);
     if (wl) {
         gn = prm_u16(g, 0, 0, 1);
         gn = prm_str(g, gn, 1, cp->ssid);
@@ -298,7 +313,8 @@ static void start_control(struct link* l)
     gn = prm(g, gn, 7, 0, 0);
     at = prm(b, at, 1, g, gn);
     csm_send(l, 0x5000, b, at);
-    csm_send(l, 0x5200, b, 0);
+    at = prm_u16(b, 0, 0, ROUTE_GUIDANCE_ID(l->cp));   /* route guidance for the display named in the identification */
+    csm_send(l, 0x5200, b, at);
     at = prm(b, 0, 4, 0, 0);
     at = prm(b, at, 5, 0, 0);
     at = prm(b, at, 6, 0, 0);
