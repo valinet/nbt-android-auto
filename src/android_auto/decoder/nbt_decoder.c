@@ -184,10 +184,13 @@ static struct {
     int running, stale_said;
 } g_win = {-1, 0, 0, 0, 0, 0, 1, 0};
 
-/* statistics per interval (the display thread's part under g_box.lock) */
+/* statistics per interval (the display thread's part under g_box.lock), logged every 5 s: received = access units
+ * from the FIFO (pictures the phone sent), decoded = pictures the decoder returned (counted when the call, VideoDecode
+ * with --hw included, has come back), shown = new pictures the car took (VideoFrame / VideoRenderFrame succeeded),
+ * repeated = the last picture again, replaced = decoded but never shown (a newer one came first) */
 static struct {
     long long since;
-    unsigned long decoded, errors, replaced, shown, hidden, repeated;
+    unsigned long received, decoded, errors, replaced, shown, hidden, repeated, present_errors;
     long long decode_us, decode_max, upload_us, upload_max;
     unsigned long total;
 } g_stat;
@@ -407,7 +410,7 @@ static void car_close(void)
 static unsigned long g_turn;
 
 /* --hw: show a surface the car decoded (no copy) */
-static void car_present_surface(const struct picture* p)
+static void car_present_surface(const struct picture* p, int repeat)
 {
     uint8_t params[64];
     memset(params, 0, sizeof(params));
@@ -421,7 +424,12 @@ static void car_present_surface(const struct picture* p)
     if (r < 0)
         say("video: VideoRenderFrame failed 0x%08x (picture %lu, surface %p)", r, p->number, p->surface);
     pthread_mutex_lock(&g_box.lock);
-    ++g_stat.shown;
+    if (r < 0)
+        ++g_stat.present_errors;
+    else if (repeat)
+        ++g_stat.repeated;
+    else
+        ++g_stat.shown;
     g_stat.upload_us += dt;
     if (dt > g_stat.upload_max)
         g_stat.upload_max = dt;
@@ -429,11 +437,11 @@ static void car_present_surface(const struct picture* p)
 }
 
 /* upload and present one picture; the buffer turns over with every picture the car took */
-static void car_present(const struct picture* p)
+static void car_present(const struct picture* p, int repeat)
 {
     static unsigned long presented;
     if (p->surface) {
-        car_present_surface(p);
+        car_present_surface(p, repeat);
         return;
     }
     const uint8_t* planes[3] = {p->y, p->uv, 0};
@@ -445,6 +453,9 @@ static void car_present(const struct picture* p)
     const long long dt = now_us() - t0;
     if (r < 0) {
         say("video: VideoFrame failed 0x%08x after %lld ms (picture %lu)", r, dt / 1000, p->number);
+        pthread_mutex_lock(&g_box.lock);
+        ++g_stat.present_errors;
+        pthread_mutex_unlock(&g_box.lock);
         return;
     }
     uint8_t params[64];
@@ -455,7 +466,12 @@ static void car_present(const struct picture* p)
     if (r < 0)
         say("video: VideoRenderFrame failed 0x%08x (picture %lu)", r, p->number);
     pthread_mutex_lock(&g_box.lock);
-    ++g_stat.shown;
+    if (r < 0)
+        ++g_stat.present_errors;
+    else if (repeat)
+        ++g_stat.repeated;
+    else
+        ++g_stat.shown;
     g_stat.upload_us += dt;
     if (dt > g_stat.upload_max)
         g_stat.upload_max = dt;
@@ -1256,9 +1272,7 @@ static void* display_thread(void* arg)
             pthread_mutex_unlock(&g_box.lock);
             return 0;
         }
-        if (repeat)
-            ++g_stat.repeated;
-        else {
+        if (!repeat) {
             const int take = g_box.newest;
             g_box.newest = g_box.showing;
             g_box.showing = take;
@@ -1270,7 +1284,7 @@ static void* display_thread(void* arg)
         const int show = g_box.showing;
         pthread_mutex_unlock(&g_box.lock);
         if (g_win.shown == 1)
-            car_present(&g_box.pic[show]);
+            car_present(&g_box.pic[show], repeat);
     }
 }
 
@@ -1373,12 +1387,14 @@ static void stats_maybe(void)
         return;
     pthread_mutex_lock(&g_box.lock);
     const double secs = (now - g_stat.since) / 1000.0;
-    if (g_stat.decoded || g_stat.errors)
-        say("stats %.1f s: %lu decoded (%.1f/s), %lu shown (%lu repeats), %lu replaced, %lu while hidden, %lu errors; "
-            "decode %.1f ms (max %.1f), upload %.1f ms (max %.1f)", secs, g_stat.decoded, g_stat.decoded / secs,
-            g_stat.shown, g_stat.repeated, g_stat.replaced, g_stat.hidden, g_stat.errors,
-            g_stat.decoded ? g_stat.decode_us / 1000.0 / g_stat.decoded : 0.0, g_stat.decode_max / 1000.0,
-            g_stat.shown ? g_stat.upload_us / 1000.0 / g_stat.shown : 0.0, g_stat.upload_max / 1000.0);
+    const unsigned long presents = g_stat.shown + g_stat.repeated + g_stat.present_errors;
+    if (g_stat.received || g_stat.errors)
+        say("stats %.1f s: received %lu (%.1f/s), decoded %lu (%.1f/s), shown %lu (%.1f/s) + %lu repeats, %lu replaced, "
+            "%lu while hidden, %lu decode / %lu show errors; decode %.1f ms per call (max %.1f), show %.1f ms (max %.1f)",
+            secs, g_stat.received, g_stat.received / secs, g_stat.decoded, g_stat.decoded / secs, g_stat.shown,
+            g_stat.shown / secs, g_stat.repeated, g_stat.replaced, g_stat.hidden, g_stat.errors, g_stat.present_errors,
+            g_stat.received ? g_stat.decode_us / 1000.0 / g_stat.received : 0.0, g_stat.decode_max / 1000.0,
+            presents ? g_stat.upload_us / 1000.0 / presents : 0.0, g_stat.upload_max / 1000.0);
     if (g_hw.active)
         say("hw: %lu pictures decoded by the car, %lu errors so far", g_hw.pictures, g_hw.errors);
     const unsigned long total = g_stat.total;
@@ -1607,6 +1623,7 @@ static void decode(uint8_t* data, size_t size)
     pkt.data = data;
     pkt.size = (int)size;
     int got = 0;
+    ++g_stat.received;
     const long long t0 = now_us();
     const int r = avcodec_decode_video2(g_dec, g_frame, &got, &pkt);
     const long long dt = now_us() - t0;

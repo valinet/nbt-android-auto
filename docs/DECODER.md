@@ -195,8 +195,18 @@ Without the assembly the car decoded a picture in ~10 ms, with it ~7 ms.
 `/fs/ram3/nbt-aa-native/nbt_decoder-<session>.log` (RAM, the session it was started in). Every 5 s, for that interval:
 
 ```
-stats 5.0 s: 150 decoded (30.0/s), 149 shown (0 repeats), 1 replaced, 0 while hidden, 0 errors; decode 6.8 ms (max 14.1), upload 12.9 ms (max 21.0)
+stats 5.0 s: received 150 (30.0/s), decoded 150 (30.0/s), shown 149 (29.8/s) + 0 repeats, 1 replaced, 0 while hidden, 0 decode / 0 show errors; decode 6.8 ms per call (max 14.1), show 12.9 ms (max 21.0)
 ```
+
+- received: pictures from the phone (access units read from the FIFO)
+- decoded: pictures the decoder gave back, counted when the call returned (with `decoder.hw` the car's `VideoDecode`
+  included), not when handed in
+- shown: new pictures the car took (`VideoFrame` / `VideoRenderFrame` succeeded); repeats: the last one again
+- replaced: decoded but never shown (a newer one came first)
+- decode: time per decode call; show: per `VideoFrame` (CPU path) or `VideoRenderFrame` (`decoder.hw`)
+
+Shown far below received: the extra pictures only cost. Decoded below received: pictures are lost or held in the
+decoder. A decode time that jumps with 60 fps: the decoder is the limit.
 
 ```
 %CAR% "grep stats /fs/ram3/nbt-aa-native/nbt_decoder-*.log"
