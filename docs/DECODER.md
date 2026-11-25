@@ -28,6 +28,7 @@ Used whenever `nbt_decoder` is installed, at 60 fps; no file is needed. Optional
 | `decoder.panelflip` | The box's texture: 1 rows reversed (default; the WalServer reads sprites bottom-up), 2 columns reversed, 3 both |
 | `decoder.panelsize` | The box's size, set by "Widget size" in iDrive's Android Auto page: `full` = full width (384 px); none (the default) or `small` = 256 px (same right edge, x 1003) with two pages, long NAV cycles page 1, page 2, off; `trip` / `car` = 256 px with only that page, long NAV on / off. Read when the session starts |
 | `decoder.args` | One line of extra arguments for `nbt_decoder` |
+| `decoder.bgvideo` | Keep decoding while the Android Auto / CarPlay page is not on screen. Default (since 2026-11-25): nothing is decoded then; Android Auto gets video focus NATIVE and pauses its video, `nbt_carplay` drops the iPhone's frames; back on the page both send a fresh key frame |
 | `decoder.delay` | Seconds after iDrive's `MARKER HMIReady` before the first session at boot (default 2) |
 | `decoder.showdelay` | Seconds of uptime before Android Auto is brought to the front (start at boot, NAV, AUX; default 40) |
 | `decoder.timeout` | `NV_NMSDK_TASK_TIMEOUT_MS` for the video calls (default 3000) |

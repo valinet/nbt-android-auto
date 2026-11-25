@@ -12,6 +12,9 @@
  * second), and nbt_decoder hides its window after decoder.stale ms (5000) without a picture: after 3 s without a frame
  * a key frame is asked for (forceKeyFrame), at most every 3 s.
  * screen_last_message(): when the last message came; wireless, nothing for 10 s means the iPhone left (nbt_carplay.c).
+ * Page not on screen (/fs/ram3/nbt-aa-hidden for 0.5 s, with NBT_AA_BG_FOCUS=1 from native_service, user 2026-11-25):
+ * the frames are not decrypted and not written, so nbt_decoder decodes nothing. Back on screen a key frame is asked for
+ * (every second until it comes) and the frames go to the FIFO again from it.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -29,6 +32,8 @@ static pthread_t g_thread;
 static int g_on, g_listen = -1, g_conn = -1;
 static volatile int g_closing;
 static volatile long long g_last_message;
+static int g_paused, g_wait_key;
+static long long g_hidden_since, g_hidden_check, g_key_asked;
 static unsigned char g_key[32];
 static int g_fifo = -1;
 static FILE* g_dump;
@@ -80,6 +85,34 @@ static int fifo_write(const unsigned char* b, unsigned n)
         n -= (unsigned)w;
     }
     return 0;
+}
+
+/* with pause_hidden: 1 while the page has not been on screen for 0.5 s; back on screen, g_wait_key until a key frame */
+static int screen_paused(void)
+{
+    const long long now = ms_now();
+    if (!g_opt.pause_hidden || now - g_hidden_check < 200)
+        return g_paused;
+    g_hidden_check = now;
+    if (access("/fs/ram3/nbt-aa-hidden", F_OK) == 0) {
+        if (!g_hidden_since)
+            g_hidden_since = now;
+        if (!g_paused && now - g_hidden_since >= 500) {
+            g_paused = 1;
+            g_wait_key = 0;
+            say("screen: page not on screen: frames not decoded");
+        }
+    } else {
+        g_hidden_since = 0;
+        if (g_paused) {
+            g_paused = 0;
+            g_wait_key = 1;
+            g_key_asked = now;
+            airplay_key_frame();
+            say("screen: page on screen: key frame asked for");
+        }
+    }
+    return g_paused;
 }
 
 /* the avcC record in a configuration body: its SPS and PPS as Annex B */
@@ -211,7 +244,12 @@ static void* screen_thread(void* arg)
         }
         if (size && read_all(c, body, size))
             break;
-        if (op != 0 && ms_now() - last_frame >= 3000 && ms_now() - asked >= 3000) {
+        screen_paused();
+        if (g_wait_key && ms_now() - g_key_asked >= 1000) {
+            g_key_asked = ms_now();
+            airplay_key_frame();
+        }
+        if (op != 0 && !g_paused && ms_now() - last_frame >= 3000 && ms_now() - asked >= 3000) {
             asked = ms_now();   /* a still screen: a key frame keeps nbt_decoder's window */
             airplay_key_frame();
         }
@@ -225,6 +263,11 @@ static void* screen_thread(void* arg)
             continue;
         }
         last_frame = ms_now();
+        if (g_paused) {   /* not decrypted: only the nonce counter goes on */
+            if (size >= 16)
+                ++counter;
+            continue;
+        }
         {
             unsigned char nonce[12];
             const unsigned char* frame = body;
@@ -240,6 +283,12 @@ static void* screen_thread(void* arg)
                 fn = size - 16;
             }
             on = annexb(frame, fn, out, &key);
+            if (g_wait_key && !key)
+                continue;
+            if (g_wait_key) {
+                g_wait_key = 0;
+                say("screen: key frame: decoding again");
+            }
             if (key && g_params_n)
                 fifo_write(g_params, g_params_n);
             if (on)
@@ -296,6 +345,8 @@ int screen_open(const unsigned char key[32], unsigned short* port)
     }
     signal(SIGPIPE, SIG_IGN);
     g_closing = 0;
+    g_paused = g_wait_key = 0;
+    g_hidden_since = g_hidden_check = 0;
     g_frames = 0;
     g_last_message = 0;
     g_params_n = 0;

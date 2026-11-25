@@ -59,6 +59,7 @@ struct cp_options {
     unsigned aux_source;               /* the car's main source of our media input (f6) */
     int knob_invert;
     int wireless;                      /* --wireless: the iPhone over the bridge board (docs/WIRELESS-BRIDGE.md) */
+    int pause_hidden;                  /* NBT_AA_BG_FOCUS=1: no frames to the decoder while the page is not on screen */
     char device_id[18], bt_id[18];     /* AirPlay deviceID and bluetoothIDs (wireless: the board's Wi-Fi / BT) */
 };
 extern struct cp_options g_opt;

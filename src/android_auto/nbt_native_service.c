@@ -730,6 +730,13 @@ int main(int argc, char** argv)
      * decoder.60fps: ask the phone for 60 fps (NBT_VID_FPS) and configure the car's stream for 60 (--fps 60). decoder.args: extra
      * arguments for nbt_decoder (one line, after ours). */
     dmode = hw && access("decoder.mode", F_OK) == 0 && access("nbt_decoder", X_OK) == 0;
+    /* NBT_AA_BG_FOCUS=1 (decoder mode, user 2026-11-25): while the page is not on screen no video is decoded. Android
+     * Auto: the phone gets video focus NATIVE and pauses its video (aa_video_capture.cpp); CarPlay: nbt_carplay drops
+     * the frames (cp_screen.c). Back on screen both send a fresh key frame. decoder.bgvideo = keep decoding, as before. */
+    if (dmode && access("decoder.bgvideo", F_OK) != 0)
+        setenv("NBT_AA_BG_FOCUS", "1", 1);
+    else
+        unsetenv("NBT_AA_BG_FOCUS");
     if (dmode) {
         int n = 0;
         const int gsplit = right;

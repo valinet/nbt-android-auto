@@ -897,9 +897,9 @@ extern "C" int nbt_video_capture_run(nbt_capture_transfer transfer, void* contex
             input = open(kInputFifo, O_RDWR | O_NONBLOCK);
         printf("AA_INPUT %s\n", input >= 0 ? "controller FIFO open" : "no controller FIFO (video only)");
     }
-    // Optional (NBT_AA_BG_FOCUS=1, off until car-tested): while the Android Auto page is not on screen
-    // (/fs/ram3/nbt-aa-hidden) tell the phone it lost the screen (video focus NATIVE): it pauses the video and sends a
-    // fresh key frame when the page comes back. Off: the phone keeps streaming in the background (proven path).
+    // NBT_AA_BG_FOCUS=1 (native_service: decoder mode unless decoder.bgvideo, 2026-11-25): while the Android Auto page
+    // is not on screen (/fs/ram3/nbt-aa-hidden) tell the phone it lost the screen (video focus NATIVE): it pauses the
+    // video and sends a fresh key frame when the page comes back. Unset: the phone keeps streaming in the background.
     const char* bg = getenv("NBT_AA_BG_FOCUS");
     const bool bg_focus = c.live && bg && !strcmp(bg, "1");
     int shown_state = 1;

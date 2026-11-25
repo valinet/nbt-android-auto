@@ -29,7 +29,8 @@
  *                  CarPlayStartSession sent, net = the iPhone connected to us over NCM, airplay = pairing and the
  *                  screen stream set up, video = 60 frames written
  * Environment (native_service): NBT_AA_MEDIA_OUT (default input_stereo_1), NBT_AA_PROMPT_OUT (prompts while another
- * source plays, e.g. input_stereo_3), NBT_AUX_SOURCE (our main source, default f6), NBT_KNOB_INVERT=1.
+ * source plays, e.g. input_stereo_3), NBT_AUX_SOURCE (our main source, default f6), NBT_KNOB_INVERT=1,
+ * NBT_AA_BG_FOCUS=1 (no frames to nbt_decoder while the page is not on screen, cp_screen.c).
  * Exit status: 0 after a session, 1 when it could not start, 2 wrong arguments.
  */
 #include <errno.h>
@@ -433,6 +434,10 @@ int main(int argc, char** argv)
             g_opt.wireless = 1;
         else
             return usage();
+    }
+    {
+        const char* bg = getenv("NBT_AA_BG_FOCUS");
+        g_opt.pause_hidden = bg && !strcmp(bg, "1");
     }
     if (g_opt.fps < 15 || g_opt.fps > 60 || g_opt.seconds < 0)
         return usage();
