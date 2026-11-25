@@ -23,7 +23,11 @@ Unlocking SSH changes the head unit's configuration. Like everything here, you d
 2. Start the installer:
    - Windows: `NBT-AndroidAuto-Installer.exe`
    - macOS: `NBT-AndroidAuto-Installer.app`; the first time open it with right-click → Open (the app is not signed).
-3. Enter the IP address and the password, click **Install / Update**.
+3. Enter the IP address and the password, click **Install / Update**. The **Gateway** field (for **Restart system** on
+   the iDrive page) can stay empty: the installer then looks up the car's gateway itself, or keeps the one already
+   stored. **Search** fills the field from the car; an address typed in replaces the stored one. If nothing is found,
+   the log says so and the page answers "Gateway not reachable": type the gateway's IP address (shown e.g. by ISTA or
+   E-Sys) into the field and install again.
 4. Restart iDrive.
 5. Plug in the phone and open **Multimedia → CarPlay / Android Auto**.
 
@@ -49,7 +53,7 @@ python3 nbt_aa_installer.py --cli install
 ```
 
 The first line installs paramiko (version 4 no longer supports the NBT's old `ssh-rsa`), the second opens the window,
-the third installs from the terminal. The `payload/` folder must be next to the script.
+the third installs from the terminal (`--gateway <ip>` sets the gateway address, otherwise it is searched). The `payload/` folder must be next to the script.
 
 ## For developers
 

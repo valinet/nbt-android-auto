@@ -10,7 +10,8 @@ HSFZ port 6801, the same request as Tool32's `STEUERGERAETE_RESET`. No HMI proce
 Car 2026-11-12: `nbt_reset 169.254.102.32` on the head unit -> `reset accepted (51 01)`, the head unit rebooted.
 The HSFZ broadcast does not reach the gateway from the head unit (`No route to host` for 169.254.255.255), so the
 gateway address goes into the file `gateway` (one line) in `/var/opt/hmi/data/rw/NbtAndroidAutoRT/`. The installer
-writes `nbt_reset` there but leaves `gateway` alone (it is car-specific).
+writes it: the address from its Gateway field (or `--gateway`), else it keeps a stored one, else it finds the gateway
+from the laptop with the same HSFZ broadcast (the Search button does only that).
 
 Log: `/fs/ram3/nbt-reboot.log` (nbt_reset's output), the plugin's decisions in `/fs/ram3/nbt-aa-plugin.log`.
 Test the tool without a reset: `nbt_reset -n <gateway>`. It needs `libsocket.so.3`, which a command run directly

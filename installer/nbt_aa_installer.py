@@ -2,7 +2,8 @@
 """NBT Android Auto installer.
 
 Writes the Android Auto package (service + iDrive "Android Auto" entry under Multimedia) to a BMW NBT head unit over
-SSH. The user only enters the head unit's IP address and the root password; nothing is stored.
+SSH. The user only enters the head unit's IP address and the root password (and, if the search does not find it, the
+address of the car's gateway); nothing is stored on the computer.
 
 What it changes on the head unit (and nothing else):
   /var/opt/hmi/data/rw/NbtAndroidAutoRT/        service binaries, certificates, boot.sh, restart.sh, vid.dpi, logs/,
@@ -12,18 +13,20 @@ Every file is written as <name>.tmp, read back and compared byte by byte, and on
 running HMI never sees a half-written file. Uninstall removes exactly these two directories.
 
 GUI:  python3 nbt_aa_installer.py
-CLI:  python3 nbt_aa_installer.py --cli install|uninstall|logs [--host 169.254.199.99]
+CLI:  python3 nbt_aa_installer.py --cli install|uninstall|logs [--host 169.254.199.99] [--gateway 169.254.x.x]
 Needs: Python 3.8+ with tkinter (GUI) and paramiko (pip install paramiko). The release builds bundle both.
 """
 import argparse
 import getpass
 import hashlib
 import io
+import ipaddress
 import json
 import locale
 import os
 import queue
 import socket
+import struct
 import sys
 import threading
 import time
@@ -83,6 +86,24 @@ T = {
     'done_uninstall': ('Entfernt. Nach dem naechsten iDrive-Neustart ist der Menuepunkt weg.',
                        'Removed. The menu entry is gone after the next iDrive restart.'),
     'busy': ('Bitte warten ...', 'Please wait ...'),
+    'gateway_found': ('Gateway des Autos gefunden und gespeichert (fuer "System neu starten"): %s',
+                      'Found and stored the gateway of the car (for "Restart system"): %s'),
+    'gateway_missing': ('Gateway des Autos nicht gefunden: "System neu starten" auf der Seite geht erst, wenn seine '
+                        'IP-Adresse eingetragen ist. Dazu die Adresse oben ins Feld "Gateway" schreiben (zeigen z. B. '
+                        'ISTA oder E-Sys an) und noch einmal installieren.',
+                        'The gateway of the car was not found: "Restart system" on the page only works once its IP '
+                        'address is set. Enter it in the "Gateway" field above (shown e.g. by ISTA or E-Sys) and '
+                        'install again.'),
+    'gateway': ('Gateway (fuer "System neu starten")', 'Gateway (for "Restart system")'),
+    'gateway_search': ('Suchen', 'Search'),
+    'gateway_searching': ('Suche das Gateway des Autos ...', 'Searching for the gateway of the car ...'),
+    'gateway_search_found': ('Gateway gefunden: %s', 'Gateway found: %s'),
+    'gateway_search_none': ('Kein Gateway gefunden. Ist das Kabel am Auto und die Zuendung an? Die Adresse kann auch '
+                            'von Hand eingetragen werden.',
+                            'No gateway found. Is the cable in the car and the ignition on? The address can also be '
+                            'entered by hand.'),
+    'gateway_bad': ('Die Gateway-Adresse ist keine IPv4-Adresse: %s', 'The gateway address is not an IPv4 address: %s'),
+    'gateway_stored': ('Gateway gespeichert (fuer "System neu starten"): %s', 'Stored the gateway (for "Restart system"): %s'),
     'no_paramiko': ('Das Python-Paket "paramiko" fehlt: pip install paramiko',
                     'The Python package "paramiko" is missing: pip install paramiko'),
     'error': ('Fehler', 'Error'),
@@ -249,7 +270,38 @@ def preflight(nbt, log, root):
         raise InstallError('The HMI data directory is read-only.')
 
 
-def install(nbt, log, root='', force=False):
+def find_gateway(nbt_host, timeout=3.0):
+    """IP address of the car's gateway (ZGW), or None: HSFZ vehicle identification, a UDP broadcast to port 6811 on
+    the ENET link. The page's "Restart system" sends its reset through the gateway, and the head unit cannot find it
+    itself (it has no route to the broadcast address), so the installer asks from the laptop."""
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect((nbt_host, 9))            # no packet is sent: only picks the interface towards the car
+        local = probe.getsockname()[0]
+        probe.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    except OSError:
+        return None
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind((local, 0))
+        sock.sendto(struct.pack('>IH', 0, 0x0011),
+                    ('169.254.255.255' if local.startswith('169.254.') else '255.255.255.255', 6811))
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            sock.settimeout(max(0.1, deadline - time.monotonic()))
+            data, sender = sock.recvfrom(512)
+            # the answer: u32 length, u16 control, then "DIAGADR..BMWMAC..BMWVIN.."
+            if len(data) >= 6 and b'DIAGADR' in data and sender[0] != nbt_host:
+                return sender[0]
+    except OSError:                             # timeout, no route, blocked by a firewall
+        pass
+    finally:
+        sock.close()
+    return None
+
+
+def install(nbt, log, root='', force=False, gateway=''):
     manifest = load_manifest()
     log('Package %s, %d files' % (manifest.get('version', '?'), len(manifest['files'])))
     preflight(nbt, log, root)
@@ -276,6 +328,19 @@ def install(nbt, log, root='', force=False):
     dpi = root + RT_DIR + '/vid.dpi'
     nbt.run("test -f '%s' || echo 100 > '%s'" % (dpi, dpi))
     nbt.run("rm -f '%s/disabled'" % (root + RT_DIR))
+    if any(e['target'].endswith('/nbt_reset') for e in files) and not root:
+        # an address the user gave wins (it also replaces a stored one); else a stored one stays; else the search
+        gateway_file = RT_DIR + '/gateway'
+        if gateway:
+            nbt.put((gateway + '\n').encode('ascii'), gateway_file, '644')
+            log(tr('gateway_stored') % gateway)
+        elif nbt.run("test -s '%s'" % gateway_file, check=False)[0] != 0:
+            gateway = find_gateway(nbt.client.get_transport().getpeername()[0])
+            if gateway:
+                nbt.put((gateway + '\n').encode('ascii'), gateway_file, '644')
+                log(tr('gateway_found') % gateway)
+            else:
+                log(tr('gateway_missing'))
     nbt.run("echo '%s' > '%s/VERSION'" % (manifest.get('version', '?'), root + RT_DIR))
     _, out, _ = nbt.run("ls -l '%s' '%s'" % (root + RT_DIR, root + PLUGIN_DIR), check=False)
     log(out.decode('utf-8', 'replace').rstrip())
@@ -323,7 +388,16 @@ def save_logs(nbt, log, target_zip, root=''):
     log('%d files saved: %s' % (count, target_zip))
 
 
-ACTIONS = {'install': install, 'uninstall': uninstall}
+def checked_gateway(text):
+    """The gateway field as an IPv4 address, '' if empty; InstallError if it is something else (it goes into a file
+    the head unit's page passes to a program)."""
+    text = text.strip()
+    if not text:
+        return ''
+    try:
+        return str(ipaddress.IPv4Address(text))
+    except ValueError:
+        raise InstallError(tr('gateway_bad') % text)
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -336,11 +410,10 @@ def run_cli(args):
         if args.cli == 'logs':
             save_logs(nbt, print, args.output or 'nbt-aa-logs-%s.zip' % time.strftime('%Y%m%d-%H%M%S'),
                       args.root)
+        elif args.cli == 'install':
+            install(nbt, print, args.root, force=args.force, gateway=checked_gateway(args.gateway))
         else:
-            if args.cli == 'install':
-                install(nbt, print, args.root, force=args.force)
-            else:
-                ACTIONS[args.cli](nbt, print, args.root)
+            uninstall(nbt, print, args.root)
     finally:
         nbt.close()
 
@@ -362,11 +435,15 @@ def run_gui(args):
         var = tk.StringVar(value=default)
         ttk.Entry(frame, textvariable=var, show=show, width=32).grid(row=row, column=1, sticky='w', pady=2)
         fields[key] = var
+    # the car's gateway for the page's "Restart system": empty = the installer searches while installing
+    ttk.Label(frame, text=tr('gateway')).grid(row=5, column=0, sticky='w', pady=2)
+    fields['gateway'] = tk.StringVar(value=args.gateway)
+    ttk.Entry(frame, textvariable=fields['gateway'], width=32).grid(row=5, column=1, sticky='w', pady=2)
     buttons = ttk.Frame(frame)
-    buttons.grid(row=5, column=0, columnspan=4, sticky='w', pady=10)
+    buttons.grid(row=6, column=0, columnspan=4, sticky='w', pady=10)
     output = scrolledtext.ScrolledText(frame, height=16, state='disabled', font=('Courier', 9))
-    output.grid(row=6, column=0, columnspan=4, sticky='nsew')
-    frame.rowconfigure(6, weight=1)
+    output.grid(row=7, column=0, columnspan=4, sticky='nsew')
+    frame.rowconfigure(7, weight=1)
     frame.columnconfigure(3, weight=1)
     messages = queue.Queue()
     widgets = []
@@ -380,6 +457,9 @@ def run_gui(args):
             if item == '\0done':
                 for widget in widgets:
                     widget.configure(state='normal')
+                continue
+            if item.startswith('\0gateway '):
+                fields['gateway'].set(item.split(' ', 1)[1])
                 continue
             output.configure(state='normal')
             output.insert('end', item + '\n')
@@ -397,6 +477,11 @@ def run_gui(args):
             messagebox.showerror(tr('error'), 'Port?')
             return
         host, user, password = fields['host'].get().strip(), fields['user'].get().strip(), fields['password'].get()
+        try:
+            gateway = checked_gateway(fields['gateway'].get())
+        except InstallError as exc:
+            messagebox.showerror(tr('error'), str(exc))
+            return
         for widget in widgets:
             widget.configure(state='disabled')
         log('--- ' + time.strftime('%H:%M:%S') + ' ' + tr('busy'))
@@ -407,8 +492,10 @@ def run_gui(args):
                 nbt = Nbt(host, port, user, password=password or None, key_file=args.key, log=log)
                 if action == 'logs':
                     save_logs(nbt, log, extra, args.root)
+                elif action == 'install':
+                    install(nbt, log, args.root, gateway=gateway)
                 else:
-                    ACTIONS[action](nbt, log, args.root)
+                    uninstall(nbt, log, args.root)
             except InstallError as exc:
                 log('%s: %s' % (tr('error'), exc))
             except Exception as exc:  # unexpected: show it instead of dying silently
@@ -419,6 +506,27 @@ def run_gui(args):
                 messages.put('\0done')
 
         threading.Thread(target=work, daemon=True).start()
+
+    def do_search():
+        host = fields['host'].get().strip()
+        for widget in widgets:
+            widget.configure(state='disabled')
+        log(tr('gateway_searching'))
+
+        def work():
+            found = find_gateway(host)
+            if found:
+                messages.put('\0gateway ' + found)
+                log(tr('gateway_search_found') % found)
+            else:
+                log(tr('gateway_search_none'))
+            messages.put('\0done')
+
+        threading.Thread(target=work, daemon=True).start()
+
+    search = ttk.Button(frame, text=tr('gateway_search'), command=do_search)
+    search.grid(row=5, column=2, sticky='w', padx=(8, 0), pady=2)
+    widgets.append(search)
 
     def do_uninstall():
         if messagebox.askyesno(APP_NAME, tr('confirm_uninstall')):
@@ -454,6 +562,8 @@ def main():
     parser.add_argument('--user', default='root')
     parser.add_argument('--output', help='logs: target zip file')
     parser.add_argument('--force', action='store_true', help='install: write every file, also the unchanged ones')
+    parser.add_argument('--gateway', default='', help='install: IP address of the car\'s gateway for "Restart system" '
+                                                      '(default: searched)')
     # development only: key login and installing below a test directory (e.g. in a QNX build VM)
     parser.add_argument('--key', help=argparse.SUPPRESS)
     parser.add_argument('--root', default='', help=argparse.SUPPRESS)

@@ -63,8 +63,8 @@ def built_files(built, pem_dir):
         else:
             source = programs / leaf
         result.append((source, name, target, mode))
-    # "Restart system" on the Android Auto page (src/idrive/reboot); the car-specific "gateway" file next to it is left as
-    # it is on the car
+    # "Restart system" on the Android Auto page (src/idrive/reboot); the car-specific "gateway" file next to it is written
+    # by the installer itself (its Gateway field or the HSFZ search), not part of the payload
     result.append((programs / 'nbt_reset', 'rt/nbt_reset', RT + '/nbt_reset', '700'))
     return result
 
