@@ -142,6 +142,7 @@ static int shown_rows(int height) { return g_opt.rows && height > g_opt.rows ? g
 static volatile sig_atomic_t g_quit;
 
 static struct {
+    void* lib;   /* libnmsdk.so */
     void* nv;
     void* stream;
     void* buffers[BUFFERS];
@@ -250,6 +251,7 @@ static int car_open(void)
 {
     void* lib = dlopen("libnmsdk.so", RTLD_NOW | RTLD_GLOBAL);
     void* (*get)(void) = lib ? (void* (*)(void))dlsym(lib, "_ZN8INvVideo10GetNvVideoEv") : 0;
+    g_car.lib = lib;
     g_car.nv = get ? get() : 0;
     if (!g_car.nv) {
         say("video: libnmsdk.so not usable (%s)", lib ? "no INvVideo" : dlerror());
@@ -279,6 +281,7 @@ static int car_open(void)
 }
 
 static void panel_open(void);
+static void sub_mixer(int w, int h, int out_h);
 
 /* the stream, sized like the first picture: decoder 0 = pictures from VideoFrame, DECODER_H264 = from VideoDecode;
  * source = the part of the picture shown, destination = where it goes in the stream's buffers (both 0 = the whole
@@ -305,6 +308,7 @@ static int car_stream_with(int w, int h, uint32_t decoder, uint32_t surfaces, co
         car_release(0);
         return -1;
     }
+    sub_mixer(w, h, out_h);
     for (int i = 0; i < BUFFERS; ++i) {
         r = ((nv_buffer_fn)nv_method(nv, NV_BUFFER))(nv, &g_car.buffers[i], (uint32_t)w, (uint32_t)out_h, 0.0f, 0);
         if (r < 0) {
@@ -378,6 +382,9 @@ static void car_release(int streamed)
     say("video: stream closed (stream 0x%08x, buffers 0x%08x, close 0x%08x)", r1, r2, r3);
 }
 
+/* the trip computer box is in the stream's mixer (panel code), and a VideoRenderFrame failed while it was */
+static volatile int g_sub_live, g_sub_failed;
+
 static pthread_t g_display;
 static int g_display_started;
 
@@ -414,6 +421,8 @@ static void car_present_surface(const struct picture* p, int repeat)
     const long long dt = now_us() - t0;
     if (r < 0)
         say("video: VideoRenderFrame failed 0x%08x (picture %lu, surface %p)", r, p->number, p->surface);
+    if (r < 0 && g_sub_live)
+        g_sub_failed = 1;
     pthread_mutex_lock(&g_box.lock);
     if (r < 0)
         ++g_stat.present_errors;
@@ -456,6 +465,8 @@ static void car_present(const struct picture* p, int repeat)
     r = ((nv_render_fn)nv_method(g_car.nv, NV_RENDER))(g_car.nv, g_car.buffers[g_turn++ % BUFFERS], g_car.stream, params);
     if (r < 0)
         say("video: VideoRenderFrame failed 0x%08x (picture %lu)", r, p->number);
+    if (r < 0 && g_sub_live)
+        g_sub_failed = 1;
     pthread_mutex_lock(&g_box.lock);
     if (r < 0)
         ++g_stat.present_errors;
@@ -492,6 +503,7 @@ static void car_present(const struct picture* p, int repeat)
  *     destination rectangle) while start <= the stream's time <= end (unsigned 64 bit; without a clock the start
  *     itself)
  *   - SubPictureAbort (24) clears the flag; SubPictureEnd / Display / RegisterSubPictureAsync only trace (unsupported)
+ *   - but the stream's mixer is created without room for a layer: see sub_mixer, which replaces it
  * So the subpicture is as large as the stream's buffers (1280 x 480 for the full window, one byte per pixel, 600 KB
  * per upload) with the box in it and the rest transparent; uploaded only when the box's picture changed (at most once
  * a second; the video itself is 0.9 MB per picture on the CPU path). It shows and hides with Android Auto's window by
@@ -1003,6 +1015,49 @@ static void sub_box(void)
     }
 }
 
+/* The stream's video mixer, as libnmsdk's OnVideoConfigure creates it: NVVAVideoMixerCreate(device, 0, width,
+ * height, 0, 0), the last argument the most layers over the video (min(n, 4), mixer byte 0x6c), and
+ * NVVAVideoMixerRender fails when given more layers than that (car 2026-11-26: every picture failed with the
+ * subpicture on, "ERROR: NVVAVideoMixerRender failed"). So right after VideoConfigure (nothing else is running in the
+ * library then: the worker thread is idle, no buffers, no stream, no picture yet) the same mixer with 1 layer replaces
+ * it: created with the same arguments, put where the stream keeps it (CVideo + 0x60, which VideoRenderFrame and
+ * CVideo::Destroy use), the old one destroyed. Its per-layer arrays are sized at creation ((2 x layers + 3) entries),
+ * so the old mixer's limit cannot simply be raised in place. Only when the box can be shown at all. */
+enum { NV_DEVICE_AT = 0x1e0, CVIDEO_MIXER_AT = 0x60 };
+typedef void* (*nvva_mixer_create_fn)(void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+typedef void (*nvva_destroy_fn)(void*);
+static int g_sub_mixer;   /* the stream has our mixer with a layer */
+
+static int panel_possible(int w, int out_h)
+{
+    return g_opt.width >= PANEL_X + PANEL_W && w == g_opt.width && out_h == g_opt.height;
+}
+
+static void sub_mixer(int w, int h, int out_h)
+{
+    g_sub_mixer = 0;
+    if (!panel_possible(w, out_h))
+        return;
+    nvva_mixer_create_fn create = (nvva_mixer_create_fn)dlsym(g_car.lib, "NVVAVideoMixerCreate");
+    nvva_destroy_fn destroy = (nvva_destroy_fn)dlsym(g_car.lib, "NVVADeviceObjectDestroy");
+    void* const device = *(void* const*)((const uint8_t*)g_car.nv + NV_DEVICE_AT);
+    void** const slot = (void**)((uint8_t*)g_car.stream + CVIDEO_MIXER_AT);
+    void* const old = *slot;
+    if (!create || !destroy || !device || !old) {
+        say("panel: no mixer with a layer (%s), no box", !create || !destroy ? "symbols" : "no device or mixer");
+        return;
+    }
+    void* const mixer = create(device, 0, (uint32_t)w, (uint32_t)h, 0, 1);
+    if (!mixer) {
+        say("panel: NVVAVideoMixerCreate with 1 layer failed, no box");
+        return;
+    }
+    *slot = mixer;
+    destroy(old);
+    g_sub_mixer = 1;
+    say("panel: the stream's mixer %p replaced by %p (1 layer, %dx%d)", old, mixer, w, h);
+}
+
 /* after a stream is set up: the subpicture as large as its buffers, the palette, the box's settings */
 static void panel_open(void)
 {
@@ -1011,14 +1066,17 @@ static void panel_open(void)
     g_sub.stream = g_car.stream;
     g_panel.ok = 0;
     g_panel.shown = 0;
+    g_sub_live = g_sub_failed = 0;
     if (g_opt.width < PANEL_X + PANEL_W) {
         say("panel: window only %d wide (split screen), no box", g_opt.width);
         return;
     }
-    if (g_car.w != g_opt.width || g_car.out_h != g_opt.height) {   /* the box would be scaled with the picture */
+    if (!panel_possible(g_car.w, g_car.out_h)) {   /* the box would be scaled with the picture */
         say("panel: stream buffers %dx%d, window %dx%d: no box", g_car.w, g_car.out_h, g_opt.width, g_opt.height);
         return;
     }
+    if (!g_sub_mixer)
+        return;
     {
         char size[16] = "";
         panel_read(RT_DIR "/decoder.panelsize", size, sizeof(size));
@@ -1111,6 +1169,7 @@ static void sub_upload(void)
     if (!g_panel.shown)
         say("panel: shown (subpicture flag %d)", *((const uint8_t*)g_car.stream + SUB_FLAG_AT));
     g_panel.shown = 1;
+    g_sub_live = 1;
 }
 
 static void panel_hide(void)
@@ -1118,6 +1177,7 @@ static void panel_hide(void)
     if (!g_panel.ok || !g_panel.shown)
         return;
     g_panel.shown = 0;
+    g_sub_live = 0;
     const int r = ((nv_sub_abort_fn)nv_method(g_car.nv, NV_SUB_ABORT))(g_car.nv, g_car.stream);
     say("panel: hidden (SubPictureAbort 0x%08x)", r);
 }
@@ -1129,6 +1189,12 @@ static void panel_policy(void)
 {
     if (!g_panel.ok)
         return;
+    if (g_sub_failed) {   /* the picture first: no box for the rest of this program */
+        say("panel: VideoRenderFrame failed with the box in the picture, box off");
+        panel_hide();
+        g_panel.ok = 0;
+        return;
+    }
     const long long now = now_ms();
     const int want = access(PANEL_OFF_FILE, F_OK) != 0;
     if (g_panel.pages == 2) {   /* another page (long NAV): drawn and uploaded at once */

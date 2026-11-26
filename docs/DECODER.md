@@ -239,6 +239,10 @@ A box at x 875, y 96, 384x167 with a "Trip computer" title line (20 px from the 
   into that bitmap, the rest is transparent; uploaded (600 KB) only when the box's picture changed, at most once a
   second. It shows and hides with Android Auto's window by itself. If the stream's buffers are not the window's size
   (they would be scaled), there is no box.
+- The stream's mixer as libnmsdk creates it takes no layer over the video (`NVVAVideoMixerCreate(..., 0)`;
+  car 2026-11-26: every picture failed with the subpicture on). Right after `VideoConfigure` the decoder creates the
+  same mixer with 1 layer and puts it in the stream's place (`CVideo` + 0x60), the old one destroyed. If a
+  `VideoRenderFrame` still fails with the box in the picture, the box is switched off for the rest of the program.
 - Before (2026-11-23 to 11-26) the box was a WAL sprite in a process of its own (`nbt_decoder --panel`). It crashed the
   head unit on 2026-11-26: `NVRM: PUSHER RESERVED CMD ERROR`, Fifo Parse Error on WalServer's GPU channel; in its
   command ring (`NVshm_44`) a later command batch had been written into the middle of our sprite's pixel upload.
