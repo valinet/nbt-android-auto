@@ -59,8 +59,8 @@ def built_files(built, pem_dir):
             source = pem_dir / leaf
         elif name.startswith('plugin/') and leaf != 'libNbtAndroidAuto.so':
             source = resources / leaf
-        elif leaf in ('boot.sh', 'restart.sh'):
-            pass  # straight from scripts/
+        elif leaf.endswith('.sh'):
+            pass  # boot.sh, restart.sh, gpu-watch.sh: straight from scripts/
         else:
             source = programs / leaf
         result.append((source, name, target, mode))
