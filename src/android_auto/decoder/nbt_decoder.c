@@ -356,7 +356,9 @@ static void window_set(int show)
     if (!g_car.wal)
         return;
     if (show) {
-        const struct { uint32_t id; uint16_t a, b; } order = {(uint32_t)g_car.window, 0, 0};
+        /* OrderTypeDef (libwal_nvidia setZOrder): window id, then the z value as 16 bits; sent to WalServer. z 64, not 0:
+         * another NBT project (2026-11-26) found z 0 has side effects in WalServer and uses 64 */
+        const struct { uint32_t id; uint16_t z, pad; } order = {(uint32_t)g_car.window, 64, 0};
         g_car.place(g_car.wal, g_car.window, 0, 0, (unsigned long)g_opt.width, (unsigned long)g_opt.height);
         g_car.order(g_car.wal, &order, 1);
     }
