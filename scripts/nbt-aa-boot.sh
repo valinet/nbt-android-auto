@@ -107,6 +107,10 @@ if test -e $P/trace-most -a -x $R/nbt_knob; then
   (cd $R; LD_LIBRARY_PATH=/opt/sys/lib:/lib:/usr/lib ./nbt_knob --trace --filter 82 --seconds 240 --fifo /fs/ram3/nbt-trace-dummy.fifo > $L/most-boot-82.txt 2>&1 &)
   echo 'most boot trace started'
 fi
+# iDrive graphics hang recorder (2026-11-26): snapshots every 20 s from the first NVRM wait on, see gpu-watch.sh
+if test ! -e $P/gpu-watch.off -a -f $P/gpu-watch.sh; then
+  sh $P/gpu-watch.sh </dev/null >/dev/null 2>&1 &
+fi
 # optional read-only observer for the cluster investigation (touch $P/trace-cluster; writes $L/cluster-trace.txt)
 if test -e $P/trace-cluster -a -f $P/cluster-trace.sh; then
   sh $P/cluster-trace.sh 3600 </dev/null >/dev/null 2>&1 &

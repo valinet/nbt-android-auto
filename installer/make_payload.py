@@ -37,6 +37,7 @@ FILES = [
     (PROTO / 'ca.pem', 'rt/ca.pem', RT + '/ca.pem', '600'),
     (REPO / 'scripts' / 'nbt-aa-boot.sh', 'rt/boot.sh', RT + '/boot.sh', '700'),
     (REPO / 'scripts' / 'nbt-aa-restart.sh', 'rt/restart.sh', RT + '/restart.sh', '700'),
+    (REPO / 'scripts' / 'nbt-gpu-watch.sh', 'rt/gpu-watch.sh', RT + '/gpu-watch.sh', '700'),
     (ENTRY / 'NbtAndroidAuto' / 'libNbtAndroidAuto.so', 'plugin/libNbtAndroidAuto.so', PLUGIN + '/libNbtAndroidAuto.so', '755'),
     (ENTRY / 'NbtAndroidAuto' / 'NbtAndroidAuto.xml', 'plugin/NbtAndroidAuto.xml', PLUGIN + '/NbtAndroidAuto.xml', '644'),
     (ENTRY / 'NbtAndroidAuto' / 'NbtAndroidAuto_ALL_Texts.zip', 'plugin/NbtAndroidAuto_ALL_Texts.zip',

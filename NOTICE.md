@@ -142,6 +142,7 @@ permission below. They contain no code from NBT-AAD or the rest of this project:
   DejaVu Sans stay under the DejaVu / Bitstream Vera font license, see [DejaVu fonts](#dejavu-fonts)) and their
   generator `scripts/gen_panel_font.py`
 - `src/idrive/reboot/nbt_reset.c`
+- `scripts/nbt-gpu-watch.sh` (records iDrive's graphics hang)
 - the CarPlay work: everything in `src/carplay/` (`nbt_carplay`, its parts and host tests, `lwip_port/`, the probe),
   `docs/CARPLAY.md`, `scripts/mbedtls_empty_name.py`, `scripts/carplay_deps.py`, `scripts/carplay_test.py`,
   `scripts/carplay_wireless_test.py`
