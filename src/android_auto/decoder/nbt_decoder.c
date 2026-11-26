@@ -57,11 +57,6 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
-#ifdef __QNXNTO__
-#include <spawn.h>   /* spawn(), struct inheritance */
-#else
-#include <spawn.h>   /* posix_spawn (host tests) */
-#endif
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -138,22 +133,19 @@ static struct {
     long stale_ms, repeat_ms;
     int rows;   /* 0 = the whole picture */
     int hw;     /* --hw */
-    int panel;  /* --panel: this process is the trip computer box (started by the main one) */
-    const char* self;
     int hwscale; /* --hw-scale: hardware decoding with --rows into stream buffers of the whole coded height (scaled twice) */
-} g_opt = {0, 0, 1280, 480, 30, 0, 5000, 50, 0, 0, 0, 0, 0};
+} g_opt = {0, 0, 1280, 480, 30, 0, 5000, 50, 0, 0, 0};
 
 /* rows of a decoded picture that are shown */
 static int shown_rows(int height) { return g_opt.rows && height > g_opt.rows ? g_opt.rows : height; }
 
 static volatile sig_atomic_t g_quit;
-extern char** environ;
 
 static struct {
     void* nv;
     void* stream;
     void* buffers[BUFFERS];
-    int w, h, ready;
+    int w, h, out_h, ready;
     void* wal;
     wal_place_fn place;
     wal_order_fn order;
@@ -332,6 +324,7 @@ static int car_stream_with(int w, int h, uint32_t decoder, uint32_t surfaces, co
     ((nv_rect_fn)nv_method(nv, NV_DEST))(nv, g_car.stream, destination ? destination : &all);
     g_car.w = w;
     g_car.h = h;
+    g_car.out_h = out_h;
     g_car.ready = 1;
     {   /* for native_service: a car stream was set up in this boot (another nbt_decoder would need a reboot) */
         const int fd = open("decoder.streamed", O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -347,12 +340,8 @@ static int car_stream_with(int w, int h, uint32_t decoder, uint32_t surfaces, co
 
 static int car_stream(int w, int h) { return car_stream_with(w, h, 0, SURFACES, 0, 0, h); }
 
-static void panel_hide(void);
-
 static void window_set(int show)
 {
-    if (!show)
-        panel_hide();
     if (!g_car.wal)
         return;
     if (show) {
@@ -483,26 +472,31 @@ static void car_present(const struct picture* p, int repeat)
 
 /* ---- trip computer box (2026-11-23; shown per iDrive's "Trip computer" option and long NAV) ----
  * User: instead of iDrive's split screen, a box over Android Auto at x 880, y 100, 380 x 136 with the trip computer (20 px from the right edge, icons before the values).
- * The picture cannot be drawn on with hardware decoding (the car decodes into its own surfaces).
  * Car 2026-11-23, a stream of its own for the box: (1) in this process it took over Android Auto's window (only its
  * top-left 280 x 100 was left, as the reference decoder's 64x64 stream created first was taken over by the real one);
  * (2) in a process of its own it never showed, with stream id -27 or 0 (slog: window 1052=VIDEO placed at 1000/120,
  * 280/100, visible, z 1, nothing on screen): a window shows the stream its owner accepts (kdAcceptClientStreamNV), and
  * 1052 belongs to another application (conn 151586_2).
- * Now a WAL sprite (user's go, 2026-11-23): an RGBA bitmap with alpha that the window server draws inside a window
- * (wal::WalApplicationInterface createSprite / assignSpriteToWindow / setSpritePosition / setSpriteSize /
- * setSpriteVisible, as in experiments/wal-overlay). Caution: the earlier sprite path for the whole picture (800x480,
- * ~1.5 MB per upload, 10-15 uploads/s) deadlocked the WalServer and restarted the head unit (docs/DEVELOPMENT.md).
- * Here: one sprite of 384 x 167 (257 KB), uploaded only when its text changed and at most once a second; a watchdog
- * ends the box's process if a WAL call blocks for over 4 s. createSprite with an existing id only replaces the content
- * (assignment, position, size and visibility stay; car 2026-11-06).
- * Window: decoder.panelwin (default 1024 = EARLYVIDEO, Android Auto's own window; the sprite is drawn over its stream,
- * hopefully; 0x50 = MOUSE, the cursor's, is the next candidate; 0x100 HMI showed sprites on 2026-11-06 but lies under
- * Android Auto). Position relative to the window, decoder.panelx / decoder.panely (default 1000 / 120).
- * The box is its own process, nbt_decoder --panel (a WAL client of its own: a stuck WAL call does not stop the
- * picture), started by the main one once its stream is up; the main one tells it over a pipe (its stdin) whether
- * Android Auto's window is shown ('1' / '0', on a change and every second); the end of the pipe means the main one has
- * ended: the sprite is hidden and destroyed and the process ends.
+ * Then a WAL sprite (2026-11-23 to 11-26, a process of its own, nbt_decoder --panel). Removed: the head unit went down
+ * on 2026-11-26 19:40 with "NVRM: PUSHER RESERVED CMD ERROR", Fifo Parse Error on channel 1 (WalServer); in
+ * WalServer's GPU command ring (NVshm_44) a later command batch had been written into the middle of our sprite's
+ * pixel upload (the 2D engine's SIFC data, ~60 % of the ring each second): two writers in one ring.
+ * Now libnmsdk's subpicture (2026-11-26): our own stream's video mixer blends it into every picture in
+ * VideoRenderFrame, in our process's GPU channel; the WalServer only sees the finished buffers, as before. Traced in
+ * libnmsdk.so (2014):
+ *   - SubPictureConfigure (method 21, {width, height}): an NVVA output surface of that size for the stream
+ *   - SubPicturePalette (22): 16 entries of Y, Cr, Cb bytes, converted to RGB with alpha 255
+ *   - SubPictureFrame (23, h, format (unused), bits, start, end, 0): NVVAOutputSurfacePutBitsIndexed of the whole
+ *     surface, one byte per pixel, alpha in the high 4 bits and the palette index in the low 4, pitch = width; sets
+ *     the stream's subpicture flag. VideoRenderFrame adds the surface as a layer over the whole picture (no source or
+ *     destination rectangle) while start <= the stream's time <= end (unsigned 64 bit; without a clock the start
+ *     itself)
+ *   - SubPictureAbort (24) clears the flag; SubPictureEnd / Display / RegisterSubPictureAsync only trace (unsupported)
+ * So the subpicture is as large as the stream's buffers (1280 x 480 for the full window, one byte per pixel, 600 KB
+ * per upload) with the box in it and the rest transparent; uploaded only when the box's picture changed (at most once
+ * a second; the video itself is 0.9 MB per picture on the CPU path). It shows and hides with Android Auto's window by
+ * itself, and also with hardware decoding. No box if the buffers are not the window's size (it would be scaled).
+ * Position in the window: decoder.panelx / decoder.panely (default 875 + 384 - the box's width / 96).
  * Data: /fs/ram3/nbt-aa-tripkombi (nbt_knob, from the cluster: trip start, duration, distance, averages) and
  * /fs/ram3/nbt-aa-trip (HMI plugin, CDS: range, tank, temperatures, instantaneous consumption, averages as fallback).
  *   12:04        44 min        30 km
@@ -893,121 +887,6 @@ static void panel_compose(void)
     g_panel.have = 1;
 }
 
-/* --panel: the box as a WAL sprite */
-typedef void* (*spr_create_ptr_fn)(void);
-typedef void (*spr_create_fn)(void*, unsigned long, const void*, unsigned long, unsigned long);
-typedef void (*spr_id_fn)(void*, unsigned long);
-typedef void (*spr_assign_fn)(void*, unsigned long, unsigned long);
-typedef void (*spr_pos_fn)(void*, unsigned long, long, long);
-typedef void (*spr_size_fn)(void*, unsigned long, unsigned long, unsigned long);
-typedef void (*spr_visible_fn)(void*, unsigned long, int);
-enum { SPRITE_ID = 0x7a40 };
-/* background colour and opacity: decoder.panelbg, hex RRGGBBAA (user 2026-11-23: to match Android Auto's dark grey
- * buttons; default 000000B4, translucent black; the car: 323232F0). Read when the box's process starts (iDrive
- * restart). Text colour and outline follow from it (spr_rgba). */
-static unsigned g_bg_r = 0, g_bg_g = 0, g_bg_b = 0, g_bg_a = 0xB4;
-
-static struct {
-    void* app;
-    spr_create_fn create;
-    spr_id_fn destroy;
-    spr_assign_fn assign;
-    spr_pos_fn pos;
-    spr_size_fn size;
-    spr_visible_fn visible;
-    unsigned long window;
-    long x, y;
-    int created;
-    volatile long long busy_since;   /* a WAL call in progress since (ms), 0 = none */
-    long long upload_at;
-} g_spr;
-static int g_spr_flip = 1;   /* decoder.panelflip, see spr_rgba */
-
-static void* spr_watchdog(void* arg)
-{
-    (void)arg;
-    for (;;) {
-        usleep(500000);
-        const long long since = g_spr.busy_since;
-        if (since && now_ms() - since > 4000) {
-            say("panel: a WAL call blocked for over 4 s, the box's process ends");
-            _exit(4);
-        }
-    }
-    return 0;
-}
-
-static void corner_mask(void);
-
-static int spr_open(void)
-{
-    void* lib = dlopen("/opt/sys/lib/libwal_nvidia.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!lib)
-        lib = dlopen("libwal_nvidia.so", RTLD_NOW | RTLD_GLOBAL);
-    spr_create_ptr_fn create_ptr = lib ? (spr_create_ptr_fn)dlsym(lib, "_ZN3wal23WalApplicationInterface9createPtrEv") : 0;
-    if (create_ptr) {
-        g_spr.create = (spr_create_fn)dlsym(lib, "_ZN3wal23WalApplicationInterface12createSpriteEmPKvmm");
-        g_spr.destroy = (spr_id_fn)dlsym(lib, "_ZN3wal23WalApplicationInterface13destroySpriteEm");
-        g_spr.assign = (spr_assign_fn)dlsym(lib, "_ZN3wal23WalApplicationInterface20assignSpriteToWindowEmm");
-        g_spr.pos = (spr_pos_fn)dlsym(lib, "_ZN3wal23WalApplicationInterface17setSpritePositionEmll");
-        g_spr.size = (spr_size_fn)dlsym(lib, "_ZN3wal23WalApplicationInterface13setSpriteSizeEmmm");
-        g_spr.visible = (spr_visible_fn)dlsym(lib, "_ZN3wal23WalApplicationInterface16setSpriteVisibleEmb");
-    }
-    if (!create_ptr || !g_spr.create || !g_spr.destroy || !g_spr.assign || !g_spr.pos || !g_spr.size || !g_spr.visible) {
-        say("panel: libwal_nvidia.so sprite interface not usable (%s)", lib ? "symbols" : dlerror());
-        return -1;
-    }
-    g_spr.busy_since = now_ms();
-    g_spr.app = create_ptr();
-    g_spr.busy_since = 0;
-    if (!g_spr.app) {
-        say("panel: WalApplicationInterface::createPtr failed");
-        return -1;
-    }
-    g_spr.window = (unsigned long)read_number(RT_DIR "/decoder.panelwin", 1024);
-    {
-        char size[16] = "";
-        panel_read(RT_DIR "/decoder.panelsize", size, sizeof(size));
-        const int trip = !strncmp(size, "trip", 4), car = !strncmp(size, "car", 3);
-        const int small = !trip && !car && strncmp(size, "full", 4) != 0;   /* the default */
-        g_panel.paged = small || trip || car;
-        g_panel.pages = small ? 2 : 1;
-        g_panel.page = car ? 2 : small && access(PANEL_PAGE2_FILE, F_OK) == 0 ? 2 : 1;
-    }
-    g_panel.w = g_panel.paged ? PANEL_PAGED_W : PANEL_W;
-    g_panel.h = g_panel.paged ? PANEL_PAGED_H : PANEL_H;
-    g_spr.x = read_number(RT_DIR "/decoder.panelx", PANEL_X + PANEL_W - g_panel.w);
-    g_spr.y = read_number(RT_DIR "/decoder.panely", PANEL_Y);
-    g_spr_flip = (int)read_number(RT_DIR "/decoder.panelflip", 1);
-    {
-        FILE* f = fopen(RT_DIR "/decoder.panelbg", "r");
-        unsigned v;
-        if (f) {
-            if (fscanf(f, "%x", &v) == 1) {
-                g_bg_r = v >> 24 & 255;
-                g_bg_g = v >> 16 & 255;
-                g_bg_b = v >> 8 & 255;
-                g_bg_a = v & 255;
-            }
-            fclose(f);
-        }
-    }
-    corner_mask();
-    pthread_t t;
-    if (pthread_create(&t, 0, spr_watchdog, 0) != 0) {
-        say("panel: watchdog could not start");
-        return -1;
-    }
-    g_panel.ok = 1;
-    const char* const kind = !g_panel.paged      ? ""
-                             : g_panel.pages == 2 ? " (small)"
-                             : g_panel.page == 2  ? " (car only)"
-                                                  : " (trip only)";
-    say("panel: sprite 0x%x, %dx%d%s, window %lu at %ld,%ld, background %02x%02x%02x%02x", SPRITE_ID, g_panel.w,
-        g_panel.h, kind, g_spr.window, g_spr.x, g_spr.y, g_bg_r, g_bg_g, g_bg_b, g_bg_a);
-    return 0;
-}
-
 /* coverage of the box with rounded corners (PANEL_RADIUS), and of the same shape 1 px inside it: the difference is
  * the 1 px outline (user 2026-11-23); 4 x 4 samples per pixel */
 static uint8_t g_corner[PANEL_W * PANEL_H_MAX], g_inner[PANEL_W * PANEL_H_MAX];
@@ -1036,213 +915,243 @@ static void corner_mask(void)
         }
 }
 
-/* the drawn box (coverage over PANEL_BG) as RGBA (user 2026-11-23): text and icons white on a dark background, black
- * on a light one (decoder.panelbg's luminance, BT.601); a 1 px outline derived from the background: a quarter of the
- * way towards the text colour (lighter on dark, darker on light), at least as opaque as the background, half way to
- * opaque. Layers, each "over" the one below (straight alpha): background, outline, text; then the rounded corners.
- * The WalServer reads sprite textures bottom-up (car 2026-11-06, nbt_wal_present; car 2026-11-23: the box came out
- * upside down): rows are written in reverse order. decoder.panelflip: bit 0 rows reversed (default 1), bit 1 columns
- * reversed (2, or 3 for both, if the box is still mirrored left-right). */
-static void spr_rgba(uint8_t* out)
+/* the box as libnmsdk's subpicture, composited by our own stream's video mixer (see the comment above) */
+typedef int (*nv_sub_configure_fn)(void*, void*, const uint32_t*);   /* 21 SubPictureConfigure(h, {width, height}) */
+typedef int (*nv_sub_palette_fn)(void*, void*, const uint8_t*);      /* 22 SubPicturePalette(h, 16 x {Y, Cr, Cb}) */
+typedef int (*nv_sub_frame_fn)(void*, void*, int, const uint8_t*, uint64_t, uint64_t, void*);   /* 23 SubPictureFrame */
+typedef int (*nv_sub_abort_fn)(void*, void*);                        /* 24 SubPictureAbort(h) */
+enum { NV_SUB_CONFIGURE = 21, NV_SUB_PALETTE = 22, NV_SUB_FRAME = 23, NV_SUB_ABORT = 24 };
+/* libnmsdk (2014) stream object: the subpicture's NVVA output surface (OnSubPictureConfigure) and the flag that puts
+ * it into VideoRenderFrame's mixer (set by OnSubPictureFrame, cleared by OnSubPictureAbort); read for the log only */
+enum { SUB_SURFACE_AT = 0x114, SUB_FLAG_AT = 0x1a8 };
+
+/* background colour and opacity: decoder.panelbg, hex RRGGBBAA (user 2026-11-23: to match Android Auto's dark grey
+ * buttons; default 000000B4, translucent black; the car: 323232F0). Read when a stream is set up. Text colour and
+ * outline follow from it (sub_box). Grey backgrounds are exact; for coloured ones red and blue may come out swapped
+ * (the order of the library's colour table in the surface is not traced). */
+static unsigned g_bg_r = 0, g_bg_g = 0, g_bg_b = 0, g_bg_a = 0xB4;
+
+static struct {
+    void* stream;   /* the stream the subpicture belongs to */
+    int fw, fh;     /* its size: the stream's buffers */
+    int x, y, flip;
+    uint8_t* frame;   /* fw x fh, one byte per pixel (alpha << 4 | index), 0 = transparent */
+    uint8_t box[PANEL_W * PANEL_H_MAX], last[PANEL_W * PANEL_H_MAX];
+    int dirty;   /* composed since the last upload */
+} g_sub;
+
+/* a palette entry as OnSubPicturePalette reads it: Y, Cr, Cb (BT.601 video range), each colour channel truncated and
+ * stored as a byte without clamping (outside 0-255 it wraps): the nearest entry that stays inside */
+static void sub_ycrcb(double r, double g, double b, uint8_t out[3])
 {
-    const unsigned luma = (299 * g_bg_r + 587 * g_bg_g + 114 * g_bg_b) / 1000;
-    const double fg = luma > 128 ? 0 : 255;                              /* text and icons */
-    const double bg[3] = {g_bg_r, g_bg_g, g_bg_b}, bga = g_bg_a / 255.0;
-    const double ol[3] = {bg[0] + (fg - bg[0]) / 4, bg[1] + (fg - bg[1]) / 4, bg[2] + (fg - bg[2]) / 4};
-    const double ola = (1 + bga) / 2;
+    const double k = 1 + 0.391 / 2.018 + 0.813 / 1.596;
+    const double l = (g + 0.391 * b / 2.018 + 0.813 * r / 1.596) / k;
+    const int y0 = (int)(l / 1.164 + 16.5), v0 = (int)((r - l) / 1.596 + 128.5), u0 = (int)((b - l) / 2.018 + 128.5);
+    double best = 1e30;
+    out[0] = 16;
+    out[1] = out[2] = 128;
+    for (int y = y0 - 2; y <= y0 + 2; ++y)
+        for (int v = v0 - 2; v <= v0 + 2; ++v)
+            for (int u = u0 - 2; u <= u0 + 2; ++u) {
+                if (y < 0 || y > 255 || v < 0 || v > 255 || u < 0 || u > 255)
+                    continue;
+                const double ly = 1.164 * (y - 16), R = 1.596 * (v - 128) + ly,
+                             G = -0.391 * (u - 128) + ly + -0.813 * (v - 128), B = 2.018 * (u - 128) + ly;
+                if (R < 0 || R >= 256 || G < 0 || G >= 256 || B < 0 || B >= 256)
+                    continue;
+                const double e = ((int)R - r) * ((int)R - r) + ((int)G - g) * ((int)G - g) + ((int)B - b) * ((int)B - b);
+                if (e < best) {
+                    best = e;
+                    out[0] = (uint8_t)y;
+                    out[1] = (uint8_t)v;
+                    out[2] = (uint8_t)u;
+                }
+            }
+}
+
+/* the drawn box (coverage over PANEL_BG) as palette index and alpha (user 2026-11-23): text and icons white on a dark
+ * background, black on a light one (decoder.panelbg's luminance, BT.601); a 1 px outline derived from the background:
+ * a quarter of the way towards the text colour, at least as opaque as the background, half way to opaque. Layers,
+ * each "over" the one below (straight alpha): background, outline, text; then the rounded corners. Every colour lies
+ * between background and text colour: s = 0..1 along that line, palette entries 1..15 = 15 steps of it (sub_open).
+ * Byte per pixel: NVVAOutputSurfacePutBitsIndexed with format 1 (as OnSubPictureFrame calls it) builds its table as
+ * alpha << 4 | index, alpha 0-15 (libnmsdk 2014). decoder.panelflip: bit 0 rows reversed, bit 1 columns (default 0). */
+static void sub_box(void)
+{
+    const double bga = g_bg_a / 255.0, ola = (1 + bga) / 2;
     const int W = g_panel.w, H = g_panel.h;
     for (int i = 0; i < W * H; ++i) {
         const int row = i / W, col = i % W;
-        const int src = ((g_spr_flip & 1) ? H - 1 - row : row) * W + ((g_spr_flip & 2) ? W - 1 - col : col);
+        const int src = ((g_sub.flip & 1) ? H - 1 - row : row) * W + ((g_sub.flip & 2) ? W - 1 - col : col);
         const int d = g_panel.draw[src] - PANEL_BG;
         const double t = d <= 0 ? 0 : d >= PANEL_FG - PANEL_BG ? 1 : (double)d / (PANEL_FG - PANEL_BG);
         const double outer = g_corner[src] / 255.0, inner = g_inner[src] / 255.0;
         const double w = outer > 0 && outer > inner ? (outer - inner) / outer : 0;   /* the outline's share */
-        double c[3] = {bg[0], bg[1], bg[2]}, a = bga;
+        double s = 0, a = bga;
         if (w > 0) {   /* outline over the background */
             const double oa = ola * w, na = oa + a * (1 - oa);
-            for (int k = 0; k < 3; ++k)
-                c[k] = na > 0 ? (ol[k] * oa + c[k] * a * (1 - oa)) / na : 0;
+            s = na > 0 ? (0.25 * oa + s * a * (1 - oa)) / na : 0;
             a = na;
         }
         if (t > 0) {   /* text over both */
             const double na = t + a * (1 - t);
-            for (int k = 0; k < 3; ++k)
-                c[k] = na > 0 ? (fg * t + c[k] * a * (1 - t)) / na : 0;
+            s = na > 0 ? (t + s * a * (1 - t)) / na : 0;
             a = na;
         }
-        for (int k = 0; k < 3; ++k)
-            out[4 * i + k] = (uint8_t)(c[k] + 0.5);
-        out[4 * i + 3] = (uint8_t)(a * outer * 255 + 0.5);
+        const int alpha = (int)(a * outer * 15 + 0.5), index = 1 + (int)(s * 14 + 0.5);
+        g_sub.box[i] = alpha ? (uint8_t)(alpha << 4 | index) : 0;
     }
 }
 
-/* upload the box if its picture changed (at most once a second); the first upload also places it */
-static void spr_update(void)
-{
-    static uint8_t rgba[PANEL_W * PANEL_H_MAX * 4], last[PANEL_W * PANEL_H_MAX * 4];
-    const long long now = now_ms();
-    if (!g_panel.have || now < g_spr.upload_at)
-        return;
-    spr_rgba(rgba);
-    if (g_spr.created && !memcmp(rgba, last, sizeof(rgba)))
-        return;
-    memcpy(last, rgba, sizeof(rgba));
-    g_spr.upload_at = now + 1000;
-    const long long t0 = now_ms();
-    g_spr.busy_since = t0;
-    g_spr.create(g_spr.app, SPRITE_ID, rgba, g_panel.w, g_panel.h);
-    if (!g_spr.created) {
-        g_spr.assign(g_spr.app, SPRITE_ID, g_spr.window);
-        g_spr.pos(g_spr.app, SPRITE_ID, g_spr.x, g_spr.y);
-        g_spr.size(g_spr.app, SPRITE_ID, g_panel.w, g_panel.h);
-        g_spr.visible(g_spr.app, SPRITE_ID, 0);
-        g_spr.created = 1;
-    }
-    g_spr.busy_since = 0;
-    const long long dt = now_ms() - t0;
-    if (dt > 200)
-        say("panel: sprite upload took %lld ms", dt);
-}
-
-static void spr_visible(int show)
-{
-    if (!g_spr.created)
-        return;
-    g_spr.busy_since = now_ms();
-    g_spr.visible(g_spr.app, SPRITE_ID, show);
-    g_spr.busy_since = 0;
-}
-
-/* main process: the box's process and the pipe that tells it whether Android Auto's window is shown */
-static struct {
-    int fd, last, tried;
-    long long sent_at;
-} g_panelc = {-1, -1, 0, 0};
-
+/* after a stream is set up: the subpicture as large as its buffers, the palette, the box's settings */
 static void panel_open(void)
 {
-    if (g_opt.panel || g_panelc.tried)   /* no master switch any more (user 2026-11-23): iDrive's page decides */
+    if (g_sub.stream == g_car.stream)
         return;
-    g_panelc.tried = 1;
+    g_sub.stream = g_car.stream;
+    g_panel.ok = 0;
+    g_panel.shown = 0;
     if (g_opt.width < PANEL_X + PANEL_W) {
         say("panel: window only %d wide (split screen), no box", g_opt.width);
         return;
     }
-    int p[2];
-    if (pipe(p) != 0) {
-        say("panel: pipe: %s", strerror(errno));
+    if (g_car.w != g_opt.width || g_car.out_h != g_opt.height) {   /* the box would be scaled with the picture */
+        say("panel: stream buffers %dx%d, window %dx%d: no box", g_car.w, g_car.out_h, g_opt.width, g_opt.height);
         return;
     }
-    fcntl(p[1], F_SETFL, O_NONBLOCK);
-    fcntl(p[1], F_SETFD, FD_CLOEXEC);
-    char fps[8];
-    snprintf(fps, sizeof(fps), "%d", g_opt.fps);
-    char* const args[] = {(char*)g_opt.self, (char*)"--panel", (char*)"--fps", fps, 0};
-    pid_t pid;
-#ifdef __QNXNTO__
-    /* QNX's own spawn(): fd_map = the child's 0, 1, 2 (stdout / stderr stay the log) */
-    const int fds[3] = {p[0], 1, 2};
-    struct inheritance inh;
-    memset(&inh, 0, sizeof(inh));
-    inh.flags = SPAWN_NOZOMBIE | SPAWN_SETSIGMASK;
-    sigemptyset(&inh.sigmask);
-    pid = spawn(g_opt.self, 3, fds, &inh, args, environ);
-    const int r = pid == -1 ? errno : 0;
-#else
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_adddup2(&fa, p[0], 0);
-    posix_spawn_file_actions_addclose(&fa, p[0]);
-    const int r = posix_spawn(&pid, g_opt.self, &fa, 0, args, environ);
-    posix_spawn_file_actions_destroy(&fa);
-#endif
-    close(p[0]);
-    if (r != 0) {
-        say("panel: %s --panel could not start: %s", g_opt.self, strerror(r));
-        close(p[1]);
+    {
+        char size[16] = "";
+        panel_read(RT_DIR "/decoder.panelsize", size, sizeof(size));
+        const int trip = !strncmp(size, "trip", 4), car = !strncmp(size, "car", 3);
+        const int small = !trip && !car && strncmp(size, "full", 4) != 0;   /* the default */
+        g_panel.paged = small || trip || car;
+        g_panel.pages = small ? 2 : 1;
+        g_panel.page = car ? 2 : small && access(PANEL_PAGE2_FILE, F_OK) == 0 ? 2 : 1;
+    }
+    g_panel.w = g_panel.paged ? PANEL_PAGED_W : PANEL_W;
+    g_panel.h = g_panel.paged ? PANEL_PAGED_H : PANEL_H;
+    g_sub.x = (int)read_number(RT_DIR "/decoder.panelx", PANEL_X + PANEL_W - g_panel.w);
+    g_sub.y = (int)read_number(RT_DIR "/decoder.panely", PANEL_Y);
+    g_sub.flip = (int)read_number(RT_DIR "/decoder.panelflip", 0);
+    {
+        FILE* f = fopen(RT_DIR "/decoder.panelbg", "r");
+        unsigned v;
+        if (f) {
+            if (fscanf(f, "%x", &v) == 1) {
+                g_bg_r = v >> 24 & 255;
+                g_bg_g = v >> 16 & 255;
+                g_bg_b = v >> 8 & 255;
+                g_bg_a = v & 255;
+            }
+            fclose(f);
+        }
+    }
+    corner_mask();
+    free(g_sub.frame);
+    g_sub.fw = g_car.w;
+    g_sub.fh = g_car.out_h;
+    g_sub.frame = (uint8_t*)calloc((size_t)g_sub.fw * g_sub.fh, 1);
+    if (!g_sub.frame) {
+        say("panel: out of memory");
         return;
     }
-    g_panelc.fd = p[1];
-    say("panel: process %d started", (int)pid);
+    /* palette: 0 = transparent (its colour unused), 1..15 = background to text colour */
+    const unsigned luma = (299 * g_bg_r + 587 * g_bg_g + 114 * g_bg_b) / 1000;
+    const double fg = luma > 128 ? 0 : 255;
+    uint8_t palette[48];
+    sub_ycrcb(0, 0, 0, palette);
+    for (int k = 0; k < 15; ++k)
+        sub_ycrcb(g_bg_r + (fg - g_bg_r) * k / 14, g_bg_g + (fg - g_bg_g) * k / 14, g_bg_b + (fg - g_bg_b) * k / 14,
+                  palette + 3 * (k + 1));
+    void* nv = g_car.nv;
+    const uint32_t conf[2] = {(uint32_t)g_sub.fw, (uint32_t)g_sub.fh};
+    const int r1 = ((nv_sub_configure_fn)nv_method(nv, NV_SUB_CONFIGURE))(nv, g_car.stream, conf);
+    const int r2 = ((nv_sub_palette_fn)nv_method(nv, NV_SUB_PALETTE))(nv, g_car.stream, palette);
+    void* const surface = *(void* const*)((const uint8_t*)g_car.stream + SUB_SURFACE_AT);
+    const char* const kind = !g_panel.paged      ? ""
+                             : g_panel.pages == 2 ? " (small)"
+                             : g_panel.page == 2  ? " (car only)"
+                                                  : " (trip only)";
+    say("panel: subpicture %dx%d (configure 0x%08x, palette 0x%08x, surface %p), box %dx%d%s at %d,%d, background "
+        "%02x%02x%02x%02x", g_sub.fw, g_sub.fh, r1, r2, surface, g_panel.w, g_panel.h, kind, g_sub.x, g_sub.y, g_bg_r,
+        g_bg_g, g_bg_b, g_bg_a);
+    if (r1 < 0 || r2 < 0 || !surface)
+        return;
+    g_panel.ok = 1;
+    g_panel.text_at = 0;
 }
 
-/* main process: tell the box's process whether Android Auto's window is shown (on a change, else every second) */
-static void panel_tell(int show, int force)
+/* the box into the subpicture if its picture changed; the first upload after a hide also shows it */
+static void sub_upload(void)
 {
-    if (g_panelc.fd < 0)
+    sub_box();
+    const size_t n = (size_t)g_panel.w * g_panel.h;
+    if (g_panel.shown && !memcmp(g_sub.box, g_sub.last, n))
         return;
-    const long long now = now_ms();
-    if (!force && show == g_panelc.last && now - g_panelc.sent_at < 1000)
-        return;
-    const char c = show ? '1' : '0';
-    if (write(g_panelc.fd, &c, 1) < 0 && errno != EAGAIN) {
-        say("panel: its process has ended (%s)", strerror(errno));
-        close(g_panelc.fd);
-        g_panelc.fd = -1;
-        return;
+    memcpy(g_sub.last, g_sub.box, n);
+    for (int row = 0; row < g_panel.h; ++row) {
+        const int y = g_sub.y + row;
+        if (y < 0 || y >= g_sub.fh)
+            continue;
+        for (int col = 0; col < g_panel.w; ++col) {
+            const int x = g_sub.x + col;
+            if (x >= 0 && x < g_sub.fw)
+                g_sub.frame[(size_t)y * g_sub.fw + x] = g_sub.box[row * g_panel.w + col];
+        }
     }
-    g_panelc.last = show;
-    g_panelc.sent_at = now;
+    const long long t0 = now_ms();
+    /* shown from time 0 to the end of time: VideoRenderFrame blends it while start <= now <= end */
+    const int r = ((nv_sub_frame_fn)nv_method(g_car.nv, NV_SUB_FRAME))(g_car.nv, g_car.stream, 0, g_sub.frame, 0,
+                                                                       UINT64_MAX, 0);
+    const long long dt = now_ms() - t0;
+    if (r < 0 || dt > 200)
+        say("panel: SubPictureFrame 0x%08x after %lld ms", r, dt);
+    if (r < 0)
+        return;
+    if (!g_panel.shown)
+        say("panel: shown (subpicture flag %d)", *((const uint8_t*)g_car.stream + SUB_FLAG_AT));
+    g_panel.shown = 1;
 }
 
 static void panel_hide(void)
 {
-    if (!g_opt.panel) {
-        panel_tell(0, 1);
-        return;
-    }
     if (!g_panel.ok || !g_panel.shown)
         return;
     g_panel.shown = 0;
-    spr_visible(0);
-    say("panel: hidden");
+    const int r = ((nv_sub_abort_fn)nv_method(g_car.nv, NV_SUB_ABORT))(g_car.nv, g_car.stream);
+    say("panel: hidden (SubPictureAbort 0x%08x)", r);
 }
 
-/* main process: after the window policy, tell the box's process; force = Android Auto's window was just set.
- * --panel: redraw every second, upload on a change, show / hide with Android Auto's window */
-static void panel_policy(int force)
+/* every window policy round (main thread): drawn every second (the short-term average speed integrates there);
+ * uploaded only while Android Auto's window is shown, the box hides and shows with that window by itself (it is part
+ * of the window's picture); long NAV (/fs/ram3/nbt-aa-panel-off) hides it */
+static void panel_policy(void)
 {
-    if (!g_opt.panel) {
-        panel_tell(g_win.shown == 1, force);
-        return;
-    }
     if (!g_panel.ok)
         return;
     const long long now = now_ms();
-    /* drawn every second (the short-term average speed integrates there), uploaded to the window server only while
-     * the box is to be shown: a hidden box causes no WAL traffic */
-    const int want = g_win.shown == 1 && access(PANEL_OFF_FILE, F_OK) != 0;
+    const int want = access(PANEL_OFF_FILE, F_OK) != 0;
     if (g_panel.pages == 2) {   /* another page (long NAV): drawn and uploaded at once */
         const int page = access(PANEL_PAGE2_FILE, F_OK) == 0 ? 2 : 1;
         if (page != g_panel.page) {
             g_panel.page = page;
             g_panel.text_at = 0;
-            g_spr.upload_at = 0;
             say("panel: page %d", page);
         }
     }
     if (now >= g_panel.text_at) {
         g_panel.text_at = now + 1000;
         panel_compose();
-        if (want)
-            spr_update();
+        g_sub.dirty = 1;
     }
     if (!want) {
         panel_hide();
         return;
     }
-    if (g_panel.shown)
+    if (g_win.shown != 1 || !g_panel.have || !g_sub.dirty)
         return;
-    if (!g_spr.created) {   /* first showing: upload now */
-        g_spr.upload_at = 0;
-        spr_update();
-        if (!g_spr.created)
-            return;
-    }
-    spr_visible(1);
-    g_panel.shown = 1;
-    say("panel: shown");
+    g_sub.dirty = 0;
+    sub_upload();
 }
 
 /* ---- display thread ---- */
@@ -1367,7 +1276,7 @@ static void window_policy(void)
             show = 1;   /* not yet */
     }
     if (!g_car.ready || (show == g_win.shown && now < g_win.refresh_at)) {
-        panel_policy(0);
+        panel_policy();
         return;
     }
     if (show != g_win.shown)
@@ -1375,7 +1284,7 @@ static void window_policy(void)
     window_set(show);
     g_win.shown = show;
     g_win.refresh_at = now + 2000;
-    panel_policy(1);
+    panel_policy();
 }
 
 /* ---- decoding ---- */
@@ -1812,42 +1721,8 @@ static int read_session(int fd)
     return -1;
 }
 
-/* --panel: the box's process; stdin = the main process's pipe */
-static int run_panel(void)
-{
-    if (spr_open() != 0)
-        return 2;
-    for (;;) {
-        fd_set in;
-        FD_ZERO(&in);
-        FD_SET(0, &in);
-        struct timeval wait = {0, 100000};
-        if (select(1, &in, 0, 0, &wait) > 0) {
-            char buf[64];
-            const ssize_t n = read(0, buf, sizeof(buf));
-            if (n <= 0)
-                break;
-            g_win.shown = buf[n - 1] == '1';
-        }
-        if (g_quit)
-            break;
-        panel_policy(0);
-    }
-    say("panel: main process gone, box removed");
-    panel_hide();
-    if (g_spr.created) {
-        g_spr.busy_since = now_ms();
-        g_spr.destroy(g_spr.app, SPRITE_ID);
-        g_spr.busy_since = 0;
-    }
-    usleep(300000);
-    return 0;
-}
-
 static int run(void)
 {
-    if (g_opt.panel)
-        return run_panel();
     if (!g_opt.bench && car_open() != 0)
         return 2;
 
@@ -1938,8 +1813,6 @@ int main(int argc, char** argv)
             g_opt.hw = 1;
         } else if (!strcmp(a, "--hw-scale")) {
             g_opt.hwscale = 1;
-        } else if (!strcmp(a, "--panel")) {
-            g_opt.panel = 1;
         } else if (!strcmp(a, "--rows") && value) {
             g_opt.rows = atoi(argv[++i]);
             if (g_opt.rows < 2)
@@ -1951,8 +1824,7 @@ int main(int argc, char** argv)
         } else
             return usage();
     }
-    g_opt.self = argv[0];
-    if (!g_opt.input && !g_opt.panel)
+    if (!g_opt.input)
         return usage();
     g_opt.stale_ms = read_number("decoder.stale", 5000);
     g_opt.repeat_ms = read_number(RT_DIR "/decoder.repeat", 50);
@@ -1962,13 +1834,10 @@ int main(int argc, char** argv)
     char timeout[16];
     snprintf(timeout, sizeof(timeout), "%ld", read_number(RT_DIR "/decoder.timeout", 3000));
     setenv("NV_NMSDK_TASK_TIMEOUT_MS", timeout, 0);
-    if (g_opt.panel)
-        say("nbt_decoder --panel: the trip computer box");
-    else
-        say("nbt_decoder: %s %s, window %dx%d, %d fps, stale %ld ms, repeat after %ld ms%s%s", g_opt.bench ? "bench" : "input",
+    say("nbt_decoder: %s %s, window %dx%d, %d fps, stale %ld ms, repeat after %ld ms%s%s", g_opt.bench ? "bench" : "input",
         g_opt.input, g_opt.width, g_opt.height, g_opt.fps, g_opt.stale_ms, g_opt.repeat_ms,
         g_opt.rows ? ", top rows only" : "", g_opt.hw ? ", hardware decoding (test)" : "");
-    if (g_opt.bench || g_opt.panel)   /* the box is only a WAL client: no video calls, no NvKdLaunch */
+    if (g_opt.bench)
         _exit(run());
     /* the video calls need libKD's thread setup: run inside NvKdLaunch */
     void* kd = dlopen("libKD.so", RTLD_NOW | RTLD_GLOBAL);

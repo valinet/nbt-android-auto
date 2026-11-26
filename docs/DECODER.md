@@ -22,10 +22,10 @@ Used whenever `nbt_decoder` is installed, at 60 fps; no file is needed. Optional
 | `decoder.stale` | Milliseconds without a new picture before the window is hidden (default 5000, `0` = never) |
 | `decoder.800` | Full screen: the old 800x480 picture stretched to 1280x480. Default (without it): sharp, the phone draws 1280x720 with its interface in the top 480 rows, shown 1:1 (`--rows 480`); 2.4x the pixels to decode on the CPU |
 | `decoder.hw` | Hardware decoding: the car's own H.264 decoder instead of FFmpeg's (`--hw`, see below); the sharp full-screen picture without the CPU cost. Also "Decoder: Software / Hardware" on iDrive's Android Auto page (default Software), which restarts the Android Auto service |
-| `decoder.panelwin`, `decoder.panelx`, `decoder.panely` | The WAL window the box is drawn in (default 1024, Android Auto's; 80 = the cursor's) and its position in it (default 875, 96) |
+| `decoder.panelx`, `decoder.panely` | The box's position in Android Auto's window (default: right edge at 1259, y 96) |
 | `decoder.fuelscale` | Microlitres of fuel per count of CDS `engine.consumption`, x1000 (default 1000), for the box's instantaneous consumption |
-| `decoder.panelbg` | The box's background as hex RRGGBBAA (default 000000B4, translucent black; FF = opaque). Text and icons are white on a dark background and black on a light one; the 1 px outline is derived from it (lighter on dark, darker on light) |
-| `decoder.panelflip` | The box's texture: 1 rows reversed (default; the WalServer reads sprites bottom-up), 2 columns reversed, 3 both |
+| `decoder.panelbg` | The box's background as hex RRGGBBAA (default 000000B4, translucent black; FF = opaque). Text and icons are white on a dark background and black on a light one; the 1 px outline is derived from it (lighter on dark, darker on light). Grey is exact; with a coloured one red and blue may come out swapped (not traced) |
+| `decoder.panelflip` | The box's bitmap: 1 rows reversed, 2 columns reversed, 3 both (default 0) |
 | `decoder.panelsize` | The box's size, set by "Widget size" in iDrive's Android Auto page: `full` = full width (384 px); none (the default) or `small` = 256 px (same right edge, x 1003) with two pages, long NAV cycles page 1, page 2, off; `trip` / `car` = 256 px with only that page, long NAV on / off. Read when the session starts |
 | `decoder.args` | One line of extra arguments for `nbt_decoder` |
 | `decoder.bgvideo` | Keep decoding while the Android Auto / CarPlay page is not on screen. Default (since 2026-11-25): nothing is decoded then; Android Auto gets video focus NATIVE and pauses its video, `nbt_carplay` drops the iPhone's frames; back on the page both send a fresh key frame |
@@ -231,20 +231,25 @@ A box at x 875, y 96, 384x167 with a "Trip computer" title line (20 px from the 
   510 trip start, 511 duration and distance; Get every 30 s, plus the cluster's updates to iDrive) into
   `/fs/ram3/nbt-aa-tripkombi`; the HMI plugin subscribes to CDS (`sensors.fuel`, `sensors.temperatureExterior`,
   `engine.temperature`, `engine.consumption`, averages as fallback) into `/fs/ram3/nbt-aa-trip`. Both RAM only.
-- Drawing: with hardware decoding the car decodes into its own surfaces, so nothing can be drawn into the picture.
-  A video stream of its own did not work (car 2026-11-23): in the decoder's process it took over Android Auto's window,
-  in a process of its own its window never showed (a window shows the stream its owner accepts). The box is now a WAL
-  sprite: an RGBA bitmap with alpha (white text over translucent black) that the window server draws inside a window,
-  uploaded only when the text changed and at most once a second (384x167, 256 KB). It runs in its own process,
-  `nbt_decoder --panel`, started by the main one, which tells it over a pipe when Android Auto's window is shown; a WAL
-  call blocking for over 4 s ends that process. The earlier sprite path for the whole picture (1.5 MB at 10-15 uploads/s)
-  deadlocked the WalServer; this is about a hundredth of that per upload, at most once a second.
+- Drawing: libnmsdk's subpicture (since 2026-11-26). Our own stream's video mixer blends it over every picture in
+  `VideoRenderFrame`, in our process's GPU channel, with software and hardware decoding alike; the window server only
+  gets the finished buffers. Methods 21 `SubPictureConfigure` (an NVVA output surface the size of the stream's
+  buffers, 1280x480), 22 `SubPicturePalette` (16 entries Y, Cr, Cb), 23 `SubPictureFrame` (the whole surface, one byte
+  per pixel: alpha in the high 4 bits, palette index in the low 4), 24 `SubPictureAbort` (hides it). The box is drawn
+  into that bitmap, the rest is transparent; uploaded (600 KB) only when the box's picture changed, at most once a
+  second. It shows and hides with Android Auto's window by itself. If the stream's buffers are not the window's size
+  (they would be scaled), there is no box.
+- Before (2026-11-23 to 11-26) the box was a WAL sprite in a process of its own (`nbt_decoder --panel`). It crashed the
+  head unit on 2026-11-26: `NVRM: PUSHER RESERVED CMD ERROR`, Fifo Parse Error on WalServer's GPU channel; in its
+  command ring (`NVshm_44`) a later command batch had been written into the middle of our sprite's pixel upload.
+  A video stream of its own for the box did not work either (car 2026-11-23): in the decoder's process it took over
+  Android Auto's window, in a process of its own its window never showed.
 - CDS notes (car 2026-11-23): `engine.consumption` is a 16-bit counter (CPxyVehicle InjectionVolume) that wraps at
   65536; the box uses the difference per second, its unit (µl per count) is a guess (`decoder.fuelscale`).
   `sensors.battery` is the IBS state of charge and often reads 255 (shown as `--%`), sometimes a real value.
   The 12 V battery voltage is not available to iDrive: not in CDS, not in the MOST proxies, not in the Jacinto
   system registers (GPIO only).
-- In split screen (window 800 wide) the box's process is not started: no box.
+- In split screen (window 800 wide): no box.
 - Long roller push (700 ms, `NBT_PUSH_LONG_MS`, `nbt_knob`): short-term average speed on / off. On, it averages the
   current speed (CDS `driving.speedActual`) from that moment and shows it at the end of the title line; a short push
   is still play / pause (now on the release).
