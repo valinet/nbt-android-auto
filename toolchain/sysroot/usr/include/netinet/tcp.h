@@ -1,0 +1,6 @@
+#ifndef _NETINET_TCP_H_INCLUDED
+#define _NETINET_TCP_H_INCLUDED
+#define TCP_NODELAY 0x01
+#define TCP_MAXSEG 0x02
+#define TCP_KEEPALIVE 0x04
+#endif

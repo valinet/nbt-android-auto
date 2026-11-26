@@ -1,0 +1,11 @@
+#!/bin/sh
+# Run a command in the open QNX 6.5.0 toolchain container with the repository mounted at /repo.
+#   toolchain/qnx-open i486-pc-nto-qnx6.5.0-gcc -v
+# Toolchain lives in build/qnx-open (mounted at /opt/qnx-open, on PATH); GCC build tree in build/toolchain-src.
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TTY=; [ -t 0 ] && TTY=-t
+exec docker run --rm -i $TTY --platform linux/amd64 \
+  -v "$ROOT/build/qnx-open:/opt/qnx-open" -v "$ROOT/build/toolchain-src:/work/src" \
+  -v "$ROOT/toolchain:/work/tc:ro" -v "$ROOT:/repo" -w "/repo${PWD#$ROOT}" \
+  -e PATH=/opt/qnx-open/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  qnx-open-host "$@"

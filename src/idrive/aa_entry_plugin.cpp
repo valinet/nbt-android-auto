@@ -34,7 +34,11 @@
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
+#ifdef NBT_OPEN_TOOLCHAIN
+#include "qnx_spawn_compat.h"
+#else
 #include <spawn.h>
+#endif
 #include <signal.h>
 #include <pthread.h>
 #include <new>

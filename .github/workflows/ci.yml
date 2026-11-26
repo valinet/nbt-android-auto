@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qnx-cross-build:
+    name: Open QNX cross-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read pinned NBT-AAD revision
+        id: revision
+        run: echo "revision=$(PYTHONPATH=scripts python3 -c 'from build_all import NBT_AAD_REVISION; print(NBT_AAD_REVISION)')" >> "$GITHUB_OUTPUT"
+      - name: Fetch pinned NBT-AAD sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Sq00ky/Supra-iDrive6-Android-Auto
+          ref: ${{ steps.revision.outputs.revision }}
+          path: .local/reference-nbt-aad
+          persist-credentials: false
+      - name: Install FFmpeg assembler
+        run: sudo apt-get update && sudo apt-get install -y yasm
+      - name: Cache open QNX toolchain
+        id: qnx-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/qnx-open
+          key: qnx-open-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('toolchain/Dockerfile', 'toolchain/*.sh', 'toolchain/qnx-open', 'toolchain/runtime/**', 'toolchain/sysroot/**', 'toolchain/patches/**') }}
+      - name: Build open QNX toolchain
+        if: steps.qnx-cache.outputs.cache-hit != 'true'
+        run: toolchain/setup.sh
+      - name: Prepare container for cached toolchain
+        if: steps.qnx-cache.outputs.cache-hit == 'true'
+        run: |
+          mkdir -p build/toolchain-src
+          docker build --platform linux/amd64 -t qnx-open-host toolchain
+          toolchain/qnx-open i486-pc-nto-qnx6.5.0-gcc -O2 -o /repo/build/hello_nbt /repo/src/hello_nbt.c
+      - name: Cross-build supported programs
+        run: python3 scripts/build_open.py --output-dir build/open-ci
+      - name: Record ELF metadata and hashes
+        run: |
+          cd build/open-ci
+          for binary in programs/*; do
+            case "$binary" in *.sh) continue;; esac
+            test -s "$binary"
+            readelf -h "$binary" | grep -q 'Class:.*ELF32'
+            readelf -h "$binary" | grep -q 'Machine:.*Intel 80386'
+            sha256sum "$binary" >> SHA256SUMS
+            printf '\n===== %s =====\n' "$binary" >> elf-report.txt
+            readelf -W -h -l -d -V --dyn-syms "$binary" >> elf-report.txt
+          done
+      - name: Upload experimental open-build outputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: open-qnx-build-${{ github.sha }}
+          path: |
+            build/open-ci/programs/
+            build/open-ci/plugin-resources/
+            build/open-ci/build.log
+            build/open-ci/SHA256SUMS
+            build/open-ci/elf-report.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  host-tests:
+    name: Host C++ (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [standard, sanitizers]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read pinned NBT-AAD revision
+        id: revision
+        run: echo "revision=$(PYTHONPATH=scripts python3 -c 'from build_all import NBT_AAD_REVISION; print(NBT_AAD_REVISION)')" >> "$GITHUB_OUTPUT"
+      - name: Fetch pinned NBT-AAD test sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Sq00ky/Supra-iDrive6-Android-Auto
+          ref: ${{ steps.revision.outputs.revision }}
+          path: .local/reference-nbt-aad
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.10'
+      - run: python -m pip install cryptography==44.0.3
+      - name: Build and run host tests
+        env:
+          CXX: clang++
+          MODE: ${{ matrix.mode }}
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          if [ "$MODE" = sanitizers ]; then
+            python3 scripts/test_host.py --sanitize
+          else
+            python3 scripts/test_host.py
+          fi
+
+  python:
+    name: Python checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.10'
+      - run: python -m pip install cryptography==44.0.3
+      - name: Check Python syntax
+        run: python -m compileall -q scripts installer tools experiments
+      - name: Run Python tests
+        run: python -m unittest discover -s scripts -p 'test_*.py' -v

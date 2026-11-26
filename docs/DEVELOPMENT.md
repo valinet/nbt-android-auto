@@ -1,4 +1,7 @@
-# Development guide
+# Development
+
+CI runs Linux host and Python tests plus an experimental open QNX cross-build. Local instructions and limitations are
+in [toolchain/README.md](../toolchain/README.md). These checks do not replace the QNX VM build or a car test. guide
 
 This page explains how the pieces are built and how to work on the car safely. **One command builds every program of
 the installed package** in the QNX VM: `python scripts/build_all.py` (see [Building everything](#building-everything)).
