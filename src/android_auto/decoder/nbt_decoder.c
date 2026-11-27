@@ -282,6 +282,7 @@ static int car_open(void)
 
 static void panel_open(void);
 static void sub_mixer(int w, int h, int out_h);
+static void vol_base(int muted, int type);
 
 /* the stream, sized like the first picture: decoder 0 = pictures from VideoFrame, DECODER_H264 = from VideoDecode;
  * source = the part of the picture shown, destination = where it goes in the stream's buffers (both 0 = the whole
@@ -1170,6 +1171,8 @@ static void panel_open(void)
     g_panel.ok = 1;
     g_panel.text_at = 0;
     g_vol.off = access(RT_DIR "/decoder.novolume", F_OK) == 0;
+    if (!g_vol.off)
+        vol_base(0, 1);   /* ready before the first step */
 }
 
 /* a w x h block of the frame at x, y: from src (rows of w), or cleared (src 0); clipped to the frame */
@@ -1346,14 +1349,14 @@ static int vol_cover(int col, int row, double inset)
     return in;
 }
 
-/* the popup for level / max into g_vol_px (alpha << 4 | index) */
-static void vol_draw(int level, int max, int muted, int type)
+/* the popup without its fill (alpha << 4 | index): only when the speaker or the name changes; the corners, outline,
+ * speaker and name take some 20 ms on the car's processor, too long for every step (user 2026-11-27: laggy) */
+static uint8_t g_vol_base[VOL_W * VOL_H];
+static int g_vol_base_muted = -1, g_vol_base_type = -1;
+static void vol_base(int muted, int type)
 {
-    static const unsigned char bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int by = VOL_BAR_Y, iy = VOL_BAR_Y + (VOL_BAR_H - VOL_ICON_H) / 2;
     vol_text(type == 1 ? "Entertainment" : "Volume", VOL_BAR_X, VOL_TEXT_TOP);
-    const int inner = VOL_BAR_W - 4;   /* outline and a 1 px gap on each side */
-    int fill = max > 0 ? (int)((double)inner * (level < 0 ? 0 : level > max ? max : level) / max + 0.5) : 0;
     for (int row = 0; row < VOL_H; ++row)
         for (int col = 0; col < VOL_W; ++col) {
             const int cover = vol_cover(col, row, 0), inner = vol_cover(col, row, 1);
@@ -1371,12 +1374,6 @@ static void vol_draw(int level, int max, int muted, int type)
                 alpha = 15;
                 if (bx == 0 || bx == VOL_BAR_W - 1 || bry == 0 || bry == VOL_BAR_H - 1)
                     index = VOL_EDGE;
-                else if (bx >= 2 && bx < 2 + fill && bry >= 2 && bry < VOL_BAR_H - 2) {
-                    /* cream, its top and bottom rows and its end paler; the end fades in (dithered) */
-                    const int end = 2 + fill - bx;   /* 1 = the last column */
-                    const int glow = end <= VOL_GLOW && bayer[row & 3][col & 3] * VOL_GLOW >= (end - 1) * 16;
-                    index = bry == 2 || bry == VOL_BAR_H - 3 || end <= 2 || glow ? VOL_PALE : VOL_CREAM;
-                }
                 else
                     index = VOL_TRACK;
             }
@@ -1392,8 +1389,31 @@ static void vol_draw(int level, int max, int muted, int type)
                 alpha = 15;
             }
             alpha = alpha * cover / 16;
-            g_vol_px[row * VOL_W + col] = alpha ? (uint8_t)(alpha << 4 | index) : 0;
+            g_vol_base[row * VOL_W + col] = alpha ? (uint8_t)(alpha << 4 | index) : 0;
         }
+    g_vol_base_muted = muted;
+    g_vol_base_type = type;
+}
+
+/* the popup for level / max into g_vol_px: the base, then the fill (cream, its top and bottom rows and its end
+ * paler; the end fades in, dithered) */
+static void vol_draw(int level, int max, int muted, int type)
+{
+    static const unsigned char bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+    if (muted != g_vol_base_muted || type != g_vol_base_type)
+        vol_base(muted, type);
+    memcpy(g_vol_px, g_vol_base, sizeof(g_vol_px));
+    const int inner = VOL_BAR_W - 4;   /* outline and a 1 px gap on each side */
+    const int fill = max > 0 ? (int)((double)inner * (level < 0 ? 0 : level > max ? max : level) / max + 0.5) : 0;
+    for (int bry = 2; bry < VOL_BAR_H - 2; ++bry) {
+        const int row = VOL_BAR_Y + bry;
+        for (int bx = 2; bx < 2 + fill; ++bx) {
+            const int col = VOL_BAR_X + bx, end = 2 + fill - bx;   /* 1 = the last column */
+            const int glow = end <= VOL_GLOW && bayer[row & 3][col & 3] * VOL_GLOW >= (end - 1) * 16;
+            const int index = bry == 2 || bry == VOL_BAR_H - 3 || end <= 2 || glow ? VOL_PALE : VOL_CREAM;
+            g_vol_px[row * VOL_W + col] = (uint8_t)(15 << 4 | index);
+        }
+    }
 }
 
 /* every window policy round: a new line in VOL_FILE shows the popup, VOL_SHOW_MS after the last one it goes */
