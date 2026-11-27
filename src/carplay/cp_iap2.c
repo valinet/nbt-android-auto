@@ -34,6 +34,10 @@ enum { CONTROL = 10, QUEUE = 64 };
 /* the route guidance display's component identifier: 1 as car-tested wired (F07, iOS 27.0.1); wireless 2, as 1 is the
  * wireless CarPlay transport there */
 #define ROUTE_GUIDANCE_ID(cp) ((cp)->wireless ? 2u : 1u)
+/* the NBT's own Bluetooth as one more component (after the route guidance display's identifier) */
+#define CAR_BT_ID(cp) ((cp)->wireless ? 3u : 2u)
+/* the iPhone rejected the identification with it: left out from then on (this program's run) */
+static int g_no_car_bt;
 
 struct link {
     const struct iap2_io* io;
@@ -274,6 +278,17 @@ static int send_identification(struct link* l)
     gn = prm_u16(g, gn, 5, 64);
     gn = prm_u16(g, gn, 6, 8);
     at = prm(b, at, 30, g, gn);
+    /* The NBT's own Bluetooth (user 2026-11-27: after a call over it the iPhone kept playing music to it, while the car
+     * listened to CarPlay): a Bluetooth transport component with its address, without "supports iAP2" (iAP2 does not
+     * run over it). A factory CarPlay car announces its Bluetooth this way, as far as known here, and the iPhone then
+     * treats that Bluetooth device and the CarPlay car as one. Not confirmed on this car (2026-11-27). Only with the
+     * address in the state directory's file car-bt; rejected = sent again without it (0x1d03). */
+    if (cp->have_car_bt && !g_no_car_bt) {
+        gn = prm_u16(g, 0, 0, CAR_BT_ID(cp));
+        gn = prm_str(g, gn, 1, "BMW NBT Bluetooth");
+        gn = prm(g, gn, 3, cp->car_bt_mac, 6);
+        at = prm(b, at, 17, g, gn);
+    }
     if (wl) {
         gn = prm_u16(g, 0, 0, 1);
         gn = prm_str(g, gn, 1, cp->ssid);
@@ -432,6 +447,12 @@ static void on_message(struct link* l, unsigned id, const unsigned char* p, unsi
             if (k < 4)
                 break;
             a += k;
+        }
+        if (l->cp->have_car_bt && !g_no_car_bt) {   /* the NBT's Bluetooth component: once more without it */
+            g_no_car_bt = 1;
+            say("%s: identification again, without the NBT's Bluetooth", l->name);
+            send_identification(l);
+            break;
         }
         l->failed = 1;
         break;

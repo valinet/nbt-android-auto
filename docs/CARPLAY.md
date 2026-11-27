@@ -42,6 +42,16 @@ head units with the same limitation:
 4. A network link over NCM (IPv6 link-local), then AirPlay on port 7000: pairing and encryption, the screen as H.264,
    the sound streams, the microphone and the controller (CarPlay supports a rotary knob).
 
+### The NBT's own Bluetooth (`car-bt`, test)
+
+After a call over the NBT's Bluetooth the iPhone may keep playing music to that Bluetooth, while the car listens to
+CarPlay (2026-11-27): for the iPhone the CarPlay car and the NBT's Bluetooth are two devices. With the NBT's Bluetooth
+address in `carplay/car-bt` (one line, `aa:bb:cc:dd:ee:ff`) the identification also names it, as a Bluetooth transport
+component without iAP2 (wired: identifier 2, wireless: 3). As far as known here a factory CarPlay car does this and
+the iPhone then treats both as one car; not confirmed on this car. If the iPhone rejects the identification, it is
+sent again without it. Without the file nothing changes. The plain workaround: Bluetooth "Audio" off for the iPhone
+in iDrive.
+
 ## The car's authentication chip
 
 `dev-i2c` (`/opt/sys/etc/i2c-conf_x86.cfg`) has it on I2C bus 0 as slave `acp`, address 0x20, node

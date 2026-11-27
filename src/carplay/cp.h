@@ -114,6 +114,9 @@ struct iap2_carplay {
     /* wireless */
     int wireless;
     unsigned char bt_mac[6];         /* the board's Bluetooth address (Bluetooth transport component) */
+    /* wired and wireless: the NBT's own Bluetooth (calls, music), from the file car-bt in the state directory */
+    int have_car_bt;
+    unsigned char car_bt_mac[6];
     const char *ssid, *passphrase;   /* the board's access point */
     unsigned channel, security;      /* security as in 5703: 2 = WPA/WPA2 */
 };

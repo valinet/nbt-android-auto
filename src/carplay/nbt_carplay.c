@@ -481,6 +481,15 @@ int main(int argc, char** argv)
     cp.public_key = airplay_public_hex();
     cp.source_version = SOURCE_VERSION;
     cp.ncm_interface = g_usb.ncm_ctrl;
+    {   /* the NBT's own Bluetooth address, "aa:bb:cc:dd:ee:ff" (see send_identification in cp_iap2.c) */
+        char text[40];
+        const int n = state_read("car-bt", text, sizeof(text) - 1);
+        if (n > 0) {
+            text[n] = 0;
+            cp.have_car_bt = !parse_mac(text, cp.car_bt_mac);
+            say("nbt_carplay: the NBT's Bluetooth %s%s", text, cp.have_car_bt ? "" : " (not an address, not used)");
+        }
+    }
     r = -1;
     if (g_opt.wireless) {
         r = g_stop ? 1 : wireless(&cp);
