@@ -153,6 +153,9 @@ void airplay_wireless(const struct iap2_carplay* cp);   /* wireless: the iAP2 tu
 #define HID_MEDIA 0x2a2a2a2cu
 #define HID_PHONE 0x2a2a2a2du
 
+/* cp_iap2.c: Status of the latest CallStateUpdate (0 none / disconnected, 2 ringing, 4 active, ...) */
+extern volatile int g_call_status;
+
 /* ---- cp_screen.c ---- */
 
 int screen_open(const unsigned char key[32], unsigned short* port);

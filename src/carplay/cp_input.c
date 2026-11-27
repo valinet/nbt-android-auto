@@ -12,6 +12,8 @@
  *   ignores what still comes until the iPhone plays again (cp_audio.c), so it stops when pressed; next / previous
  *   likewise for the iPhone's audio lead
  *   voice (84, the long press of the steering wheel button) -> Siri
+ *   phone button (79, HEADSETHOOK; Android Auto drops it) -> the telephony HID's hook switch while a call rings or
+ *   runs (answer / end; then 0), without a call nothing: iDrive's phone menu as before
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -40,6 +42,15 @@ static void media(unsigned code)
     airplay_hid(HID_MEDIA, &r, 1);
     r = 0;
     airplay_hid(HID_MEDIA, &r, 1);
+}
+
+/* the telephony HID: one byte, the index into the descriptor's usages (1 = hook switch), then 0 */
+static void phone(unsigned code)
+{
+    unsigned char r = (unsigned char)code;
+    airplay_hid(HID_PHONE, &r, 1);
+    r = 0;
+    airplay_hid(HID_PHONE, &r, 1);
 }
 
 static void line(const char* l)
@@ -120,6 +131,16 @@ static void line(const char* l)
     case 84:
         if (value)
             airplay_siri();
+        break;
+    case 79:
+        if (value) {
+            const int st = g_call_status;
+            if (st >= 1 && st <= 5) {
+                say("input: phone button, call %d: hook switch", st);
+                phone(1);
+            } else
+                say("input: phone button, no call");
+        }
         break;
     default:
         break;

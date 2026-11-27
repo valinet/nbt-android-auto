@@ -423,6 +423,27 @@ static void now_playing(struct link* l, const unsigned char* p, unsigned n)
     flag_set("/fs/ram3/nbt-aa-media", st[0] == 1 ? "2\n" : "3\n");
 }
 
+/* CallStateUpdate (4155): Status 2 = 0 disconnected, 1 sending, 2 ringing, 3 connecting, 4 active, 5 held,
+ * 6 disconnecting; Direction 3 = 1 incoming, 2 outgoing. The steering wheel's phone button answers or ends over the
+ * telephony HID (cp_input.c) */
+volatile int g_call_status;
+
+static void call_state(struct link* l, const unsigned char* p, unsigned n)
+{
+    static const char* const names[] = {"disconnected", "sending", "ringing", "connecting", "active", "held",
+                                        "disconnecting"};
+    unsigned len;
+    const unsigned char* v = prm_find(p, n, 2, &len);
+    const unsigned char* d = prm_find(p, n, 3, &len);
+    int st;
+    if (!v)
+        return;
+    st = v[0];
+    g_call_status = st;
+    say("%s: call %s%s", l->name, st < 7 ? names[st] : "?",
+        !d ? "" : d[0] == 1 ? " (incoming)" : d[0] == 2 ? " (outgoing)" : "");
+}
+
 static void on_message(struct link* l, unsigned id, const unsigned char* p, unsigned n)
 {
     unsigned char out[1400], sig[128];
@@ -526,6 +547,9 @@ static void on_message(struct link* l, unsigned id, const unsigned char* p, unsi
         break;
     case 0x5001:
         now_playing(l, p, n);
+        break;
+    case 0x4155:
+        call_state(l, p, n);
         break;
     default:
         break;

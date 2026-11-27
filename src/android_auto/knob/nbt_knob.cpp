@@ -285,8 +285,16 @@ long long g_listUntil = 0;      // roller for iDrive's phone list until then
 unsigned g_listHoldMs = 4000;
 
 void onVoiceButton(const nbt::most::View& m);   // below, with the audio source
+bool g_phoneDown = false;
 void onWheel(const nbt::most::View& m, void*) {
     if (m.fkt == 0x512) { onVoiceButton(m); return; }                    // voice button (PTTButton1)
+    // phone button (01 pressed, 00 released; a copy per HMI receiver): KEYCODE_HEADSETHOOK 79 for CarPlay, which
+    // answers / ends a call over its telephony HID (user 2026-11-27: over iDrive's Bluetooth it took ages). Android
+    // Auto drops 79 (allowed_key); iDrive still gets the button
+    if (m.fkt == 0x400 && m.len >= 1 && (m.data[0] == 1) != g_phoneDown && m.data[0] <= 1) {
+        g_phoneDown = m.data[0] == 1;
+        wheelKeyLine(79, g_phoneDown ? 1 : 0, "PHONE");
+    }
     if (m.fkt == 0x400 && m.len >= 1 && m.data[0] == 1 && g_listHoldMs) {   // phone button pressed
         const bool copy = g_listUntil - (nowMs() + g_listHoldMs) > -200;   // the same press, once per HMI receiver
         g_listUntil = nowMs() + g_listHoldMs;

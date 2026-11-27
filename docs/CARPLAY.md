@@ -75,7 +75,7 @@ the keys come from nbt_knob's `input.fifo`, as for Android Auto. One run = one i
 | `cp_airplay.c`, `cp_bplist.c`, `cp_crypto.c` | AirPlay: /info (1280x480, knob, no touch), pair-setup (SRP, PIN 3939, Ed25519 with Monocypher), pair-verify (X25519), encrypted control connection, auth-setup (the chip), SETUP, event connection, timing, feedback |
 | `cp_screen.c` | Screen stream (type 110) decrypted, AVCC -> Annex B with an access unit delimiter after each frame. On a still screen the iPhone sends no frames, so after 3 s without one it is asked for a key frame (nbt_decoder hides its window after 5 s without a picture) |
 | `cp_audio.c`, `cp_mic.c` | LPCM streams -> 48 kHz stereo -> media `input_stereo_1`; prompts on it too or, while another source plays, `input_stereo_3` over b8 (as for Android Auto); microphone `/output_multich_0` -> the iPhone |
-| `cp_input.c` | Knob turns -> knob wheel, tilts -> knob x / y, push -> select, BACK -> back, media keys -> media HID, voice -> Siri. `NBT_KNOB_INVERT=1` turns the wheel around |
+| `cp_input.c` | Knob turns -> knob wheel, tilts -> knob x / y, push -> select, BACK -> back, media keys -> media HID, voice -> Siri, the steering wheel phone button (79) -> the telephony HID hook switch while a call rings or runs (`call ringing` / `call active` lines from the iPhone's CallStateUpdate in the log). `NBT_KNOB_INVERT=1` turns the wheel around |
 
 ## Debugging
 
