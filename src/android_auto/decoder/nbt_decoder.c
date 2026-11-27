@@ -972,12 +972,12 @@ static struct {
 /* the volume popup's state (vol_policy) */
 static struct {
     long seq;          /* the last line's number; -1 = none read yet (the first is only the starting point) */
-    int level, max, muted;
+    int level, max, muted, type;
     long long until;   /* shown until (monotonic ms) */
     long long read_at; /* the file is read at most every VOL_POLL_MS */
     int off;           /* decoder.novolume */
     unsigned shown;    /* how many times, for the log */
-} g_vol = {-1, 0, 0, 0, 0, 0, 0, 0};
+} g_vol = {-1, 0, 0, 0, 0, 0, 0, 0, 0};
 
 /* a palette entry as OnSubPicturePalette reads it: Y, Cr, Cb (BT.601 video range), each colour channel truncated and
  * stored as a byte without clamping (outside 0-255 it wraps): the nearest entry that stays inside */
@@ -1244,22 +1244,49 @@ static void box_take(void)
 /* ---- the volume popup (user 2026-11-27) ----
  * iDrive's own volume popup is behind Android Auto's / CarPlay's picture, so ours is drawn into it: the stock look
  * (photo of the car's screen, the user's, 2026-11-27: a dark translucent panel with a light top edge, a speaker, a
- * dark bar with a light outline and a cream fill with a bright end), without the stock popup's second row (the
- * audio's name, "Navigation"), so 44 px instead of about 90. 604 px wide, centred, its middle at 2/3 of the height.
- * Sizes measured on that photo (a camera picture of the screen, so to a pixel or two).
- * The level comes from /fs/ram3/nbt-aa-volume, one line "<number> <level> <maximum> <muted 0/1>", written whenever
- * the volume changes (the number counts up, so the same level again, at the maximum, shows the popup too). Who writes
- * it is not there yet (2026-11-27: the volume's messages on MOST still have to be traced); by hand:
- *   echo "1 12 40 0" > /fs/ram3/nbt-aa-volume
+ * dark bar with a light outline and a cream fill with a bright end, below it the audio's name: "Entertainment"
+ * (user 2026-11-27) where the photo had "Navigation"). 604 x 84, centred, its middle at 2/3 of the height. Sizes
+ * measured on that photo (a camera picture of the screen, so to a pixel or two); the name in our font (DejaVu Sans
+ * 22 px, made bold by drawing it twice, 1 px apart), at the bar's left edge as on the photo.
+ * The level comes from /fs/ram3/nbt-aa-volume, one line "<number> <level> <maximum> <muted 0/1> <type>", written by
+ * nbt_knob from the audio master's volume status (MOST 20/00 C08) on every step (the number counts up, so the same
+ * level again, at the maximum, shows the popup too). Type 1 (the only one seen) = "Entertainment", others "Volume".
+ * By hand: echo "1 12 40 0 1" > /fs/ram3/nbt-aa-volume
  * The first line read is only the starting point. Shown for VOL_SHOW_MS after the last change (the stock timing is
  * not measured), only while Android Auto's window is shown (otherwise iDrive's own popup is on screen).
  * decoder.novolume (file in the package): never shown. */
 #define VOL_FILE "/fs/ram3/nbt-aa-volume"
-enum { VOL_W = 604, VOL_H = 44, VOL_SHOW_MS = 3000, VOL_POLL_MS = 50 };
+enum { VOL_W = 604, VOL_H = 84, VOL_SHOW_MS = 3000, VOL_POLL_MS = 50 };
 enum { VOL_ICON_X = 48, VOL_ICON_W = 22, VOL_ICON_H = 26 };
-enum { VOL_BAR_X = 108, VOL_BAR_W = VOL_W - VOL_BAR_X - 50, VOL_BAR_H = 22, VOL_GLOW = 12 };
+enum { VOL_BAR_X = 108, VOL_BAR_Y = 11, VOL_BAR_W = VOL_W - VOL_BAR_X - 50, VOL_BAR_H = 22, VOL_GLOW = 12 };
+enum { VOL_TEXT_TOP = 40 };   /* the name's glyph box (its capitals from about 5 px lower) */
 enum { VOL_RADIUS = 3, VOL_ALPHA = 12 };   /* the panel's opacity (of 15): the map shows through, as on the photo */
 static uint8_t g_vol_px[VOL_W * VOL_H];
+static uint8_t g_vol_text[VOL_W * VOL_H];   /* the name's coverage */
+
+/* the name into g_vol_text: bold = each glyph twice, the second 1 px to the right */
+static void vol_text(const char* t, int x, int top)
+{
+    memset(g_vol_text, 0, sizeof(g_vol_text));
+    for (; *t; ++t) {
+        const int g = panel_glyph((unsigned char)*t);
+        const unsigned char* bits = panel_bits + panel_glyphs[g].offset;
+        const int gw = panel_glyphs[g].width;
+        for (int pass = 0; pass < 2; ++pass) {
+            const int gx = x + panel_glyphs[g].left + pass;
+            for (int row = 0; row < PANEL_FONT_HEIGHT; ++row)
+                for (int col = 0; col < gw; ++col) {
+                    const int px = gx + col, py = top + row;
+                    if (px < 0 || px >= VOL_W || py < 0 || py >= VOL_H)
+                        continue;
+                    uint8_t* d = &g_vol_text[py * VOL_W + px];
+                    if (bits[row * gw + col] > *d)
+                        *d = bits[row * gw + col];
+                }
+        }
+        x += panel_glyphs[g].advance;
+    }
+}
 
 static int vol_x(void)
 {
@@ -1312,10 +1339,11 @@ static int vol_cover(int col, int row)
 }
 
 /* the popup for level / max into g_vol_px (alpha << 4 | index) */
-static void vol_draw(int level, int max, int muted)
+static void vol_draw(int level, int max, int muted, int type)
 {
     static const unsigned char bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-    const int by = (VOL_H - VOL_BAR_H) / 2, iy = (VOL_H - VOL_ICON_H) / 2;
+    const int by = VOL_BAR_Y, iy = VOL_BAR_Y + (VOL_BAR_H - VOL_ICON_H) / 2;
+    vol_text(type == 1 ? "Entertainment" : "Volume", VOL_BAR_X, VOL_TEXT_TOP);
     const int inner = VOL_BAR_W - 4;   /* outline and a 1 px gap on each side */
     int fill = max > 0 ? (int)((double)inner * (level < 0 ? 0 : level > max ? max : level) / max + 0.5) : 0;
     for (int row = 0; row < VOL_H; ++row)
@@ -1347,6 +1375,12 @@ static void vol_draw(int level, int max, int muted)
                 index = VOL_PALE;
                 alpha = 15;
             }
+            /* the name: its coverage in the popup's own colours, darkest to lightest (no colour in between) */
+            const unsigned tc = g_vol_text[row * VOL_W + col];
+            if (tc >= 40) {
+                index = tc < 110 ? VOL_LIGHT : tc < 190 ? VOL_EDGE : VOL_PALE;
+                alpha = 15;
+            }
             alpha = alpha * cover / 16;
             g_vol_px[row * VOL_W + col] = alpha ? (uint8_t)(alpha << 4 | index) : 0;
         }
@@ -1361,26 +1395,28 @@ static void vol_policy(long long now)
         g_vol.read_at = now + VOL_POLL_MS;
         char line[64] = "";
         long seq;
-        int level, max, muted = 0;
+        int level, max, muted = 0, type = 1;
         FILE* f = fopen(VOL_FILE, "r");
         if (f) {
             if (!fgets(line, sizeof(line), f))
                 line[0] = 0;
             fclose(f);
         }
-        if (sscanf(line, "%ld %d %d %d", &seq, &level, &max, &muted) >= 3 && seq != g_vol.seq) {
+        if (sscanf(line, "%ld %d %d %d %d", &seq, &level, &max, &muted, &type) >= 3 && seq != g_vol.seq) {
             const int first = g_vol.seq == -1;
             g_vol.seq = seq;
             if (!first && g_win.shown == 1) {
                 if (g_vol.shown++ < 20)
                     say("volume: %d of %d%s", level, max, muted ? ", muted" : "");
-                if (!g_sub.vol_in || level != g_vol.level || max != g_vol.max || muted != g_vol.muted) {
-                    vol_draw(level, max, muted);
+                if (!g_sub.vol_in || level != g_vol.level || max != g_vol.max || muted != g_vol.muted ||
+                    type != g_vol.type) {
+                    vol_draw(level, max, muted, type);
                     sub_put(vol_x(), vol_y(), VOL_W, VOL_H, g_vol_px);
                 }
                 g_vol.level = level;
                 g_vol.max = max;
                 g_vol.muted = muted;
+                g_vol.type = type;
                 g_vol.until = now + VOL_SHOW_MS;
                 g_sub.vol_in = 1;
             }

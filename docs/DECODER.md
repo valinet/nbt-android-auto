@@ -279,15 +279,18 @@ A box at x 875, y 96, 384x167 with a "Trip computer" title line (20 px from the 
 ## Volume popup
 
 iDrive's own volume popup is behind Android Auto's / CarPlay's picture, so the decoder draws one into the picture, in
-the same subpicture as the trip box: the stock look (a photo of the car's screen, 2026-11-27) without its second row
-(the audio's name), 604x44, centred, its middle at 2/3 of the height. A dark translucent panel with a light top edge,
-the speaker (crossed out when muted), a dark bar with a light outline and a cream fill with a bright end.
+the same subpicture as the trip box: the stock look (a photo of the car's screen, 2026-11-27), 604x84, centred, its
+middle at 2/3 of the height. A dark translucent panel with a light top edge, the speaker (crossed out when muted), a
+dark bar with a light outline and a cream fill with a bright end, and below it "Entertainment" (bold DejaVu Sans) where
+the stock popup names the audio.
 
-- Level: `/fs/ram3/nbt-aa-volume`, one line `<number> <level> <maximum> <muted 0/1>`, written on every volume change
-  (the number counts up, so the same level again shows it too). The first line the decoder reads is only the starting
-  point. Read every 50 ms while the window is shown.
-- Who writes it: not done yet (2026-11-27). The volume knob's / keys' messages on MOST still have to be traced
-  (`nbt_knob --trace`). To try it by hand: `echo "1 12 40 0" > /fs/ram3/nbt-aa-volume`, then the same with 2, 3, ...
+- Level: `nbt_knob` takes the audio master's volume status from MOST (car trace 2026-11-27: 100F to the HMI, FBlock
+  20/00 fkt C08, `01 00 LL 00 64` = type 1, level, maximum 100, one per step, level 0 on mute) and writes
+  `/fs/ram3/nbt-aa-volume`: `<number> <level> <maximum> <muted 0/1> <type>` (the number counts up). Muted = level 0
+  within 1 s after the mute key (15/0C C04). The decoder reads the file every 50 ms; the first line it reads is only
+  the starting point.
+- By hand: `echo "1 12 100 0 1" > /fs/ram3/nbt-aa-volume`, then the same with 2, 3, ...
+- Type 1 (the only one seen) is shown as "Entertainment", any other as "Volume".
 - Shown for 3 s after the last change (the stock popup's time is not measured), only while Android Auto's window is
   shown (on iDrive's own pages iDrive's popup is visible).
 - Palette (16 entries for both): 0 transparent, 1..9 the box (its background to its text colour), 10..15 the popup's

@@ -797,6 +797,38 @@ void onTripStatus(const nbt::most::View& m, void*) {
     pthread_mutex_unlock(&g_tripMx);
 }
 
+// Volume (car trace 2026-11-27, nbt_knob --trace: knob right / left, mute, steering wheel + / -). The audio master
+// 100F sends the HMI FBlock 20/00 fkt C08 Status, 5 bytes, once per step, also on mute (level 0) and unmute:
+//   01 00 LL 00 64   [0] 01 (always in the trace: the entertainment volume, assumed), [1..2] the level, [3..4] 100
+//                    (its maximum), big endian; e.g. 0x25 .. 0x32 for 8 steps up
+// (C30 to 2011 carries the raw step, 0x16 .. 0x1d.) The keys, for reference: knob 15/0C C01 (02 01 right, 01 01 left,
+// 00 00 released), mute 15/0C C04 (01 pressed, 00 released), wheel 15/02 401 (00 00 02 01 up, 00 00 01 01 down).
+// Each C08 -> one line in /fs/ram3/nbt-aa-volume for nbt_decoder's volume popup: "<n> <level> <max> <muted> <type>"
+// (n counts up). Muted: the level 0 within 1 s after the mute key, until a level above 0 (level 0 from turning down is
+// not muted). Not in a --trace copy.
+const char* const kVolumeFile = "/fs/ram3/nbt-aa-volume";
+long long g_muteKeyAt = -100000;
+bool g_muted = false;
+void onMuteKey(const nbt::most::View& m, void*) {
+    if (m.len >= 1 && m.data[0] == 0x01) g_muteKeyAt = nowMs();
+}
+void onVolume(const nbt::most::View& m, void*) {
+    static unsigned long n = 0;
+    if (m.len < 5) return;
+    const unsigned level = be16(m.data + 1), max = be16(m.data + 3);
+    if (level == 0 && nowMs() - g_muteKeyAt < 1000) g_muted = true;
+    else if (level > 0) g_muted = false;
+    char line[64], tmp[64];
+    const int k = snprintf(line, sizeof(line), "%lu %u %u %d %u\n", ++n, level, max, g_muted ? 1 : 0, m.data[0]);
+    snprintf(tmp, sizeof(tmp), "%s.tmp", kVolumeFile);
+    const int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    const bool ok = write(fd, line, (size_t)k) == k;
+    close(fd);
+    if (ok) rename(tmp, kVolumeFile);
+    if (n <= 20) printf("[Volume] %u of %u%s (type %u)\n", level, max, g_muted ? ", muted" : "", m.data[0]);
+}
+
 void tripIfNeeded(nbt::most::Client& most) {
     if (!g_trip || most.state() != nbt::most::kUp) return;
     const long long now = nowMs();
@@ -1218,6 +1250,8 @@ int main(int argc, char** argv) {
         g_wheelAuxOnly = wheelKey("NBT_WHEEL_AUX_ONLY", 1) != 0;
     g_listHoldMs = wheelKey("NBT_LIST_HOLD_S", 4) * 1000;
     }
+    if (!trace && (!most.addRoute(0x20, 0x00, 0xC08, 0xC, &onVolume, NULL) || !most.addRoute(0x15, 0x0C, 0xC04, 0xC, &onMuteKey, NULL)))
+        printf("[Knob] no room for the volume routes\n");
     if (!most.addRoute(0x03, 0x00, 0xC03, 0xC, &onSource, NULL)) printf("[Knob] no room for the audio source route\n");
     if (!most.addRoute(0x03, 0x00, 0x053, nbt::most::kAny, &onSourceResult, NULL)) printf("[Knob] no room for the switch result route\n");
     if (!most.addRoute(0x03, 0x00, 0x054, nbt::most::kAny, &onSourceResult, NULL)) printf("[Knob] no room for the remove result route\n");
