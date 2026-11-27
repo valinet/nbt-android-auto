@@ -181,7 +181,7 @@ Multimedia -> **CarPlay & Android Auto** always opens the menu. Settings are fla
 | Advanced > Show frame rate | `decoder.showfps` | unticked | nbt_decoder, every second |
 | Advanced > Display volume changes | `decoder.novolume` when unticked | ticked | nbt_decoder, every second |
 | Advanced > Reboot | - | - | nbt_reset |
-| Settings > Reset values | removes all of the above (and the older `anamorph`, `center800`, `classic`, `decoder.hw`, `start-at-boot.off`) | - | - |
+| Settings > Reset | removes all of the above (and the older `anamorph`, `center800`, `classic`, `decoder.hw`, `start-at-boot.off`) | - | - |
 
 Checkboxes are raActions with raBoolModels (`PluginApp::addHandler(action, delegate)`, libAppFramework); not yet tried
 in the car as of this commit.

@@ -1500,7 +1500,8 @@ static void vol_policy(long long now)
 /* ---- the frame rate overlay (user 2026-11-27, "Show frame rate" in iDrive's Advanced settings) ----
  * decoder.showfps in the package: a small box in the top left corner with the pictures shown in the last second
  * (repeats of the last picture not counted), updated every second. Off: nothing is drawn or uploaded, only the flag is
- * looked at once a second (settings_poll). Same subpicture as the box (full width only), the volume popup's colours. */
+ * looked at once a second (settings_poll). Same subpicture as the box (full width only): opaque black (user 2026-11-27: readable over any picture), the
+ * volume popup's outline and text colours. */
 static uint8_t g_fps_px[FPS_W * FPS_H];
 
 /* coverage (of 16, 4 x 4 samples) of a w x h rectangle with corners of radius r, inset px inside it */
@@ -1547,7 +1548,7 @@ static void fps_draw(int value)
         for (int col = 0; col < FPS_W; ++col) {
             const int cover = round_cover(col, row, FPS_W, FPS_H, FPS_RADIUS, 0);
             const int inner = round_cover(col, row, FPS_W, FPS_H, FPS_RADIUS, 1);
-            int index = cover > inner ? VOL_LIGHT : VOL_DARK, alpha = VOL_ALPHA;
+            int index = cover > inner ? VOL_LIGHT : 0, alpha = 15;   /* opaque black (palette 0), the light outline */
             const unsigned tc = cov[row * FPS_W + col];
             if (tc >= 40) {
                 index = tc < 110 ? VOL_LIGHT : tc < 190 ? VOL_EDGE : VOL_PALE;

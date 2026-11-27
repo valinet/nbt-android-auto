@@ -607,7 +607,7 @@
           <checkbox id="823" action="713" model="794" text="Open widget automatically"/>
           <checkbox id="824" action="714" model="795" text="Use large widget"/>
           <button id="825" action="715" model="752" text="Advanced"/>
-          <button id="826" action="716" model="753" text="Reset values"/>
+          <button id="826" action="716" model="753" text="Reset"/>
         </components>
       </hmiState>
       <hmiState id="42" parentId="40" textModel="752" text="Advanced">
@@ -619,9 +619,10 @@
           <button id="86" action="80" model="82" text="Reboot"/>
         </components>
       </hmiState>
-      <hmiState id="44" parentId="40" textModel="753" text="Reset values">
+      <hmiState id="44" parentId="40" textModel="753" text="Reset">
         <components>
-          <label id="841" model="754" text="Reset settings to default?"><properties><property id="2" value="false"/></properties></label>
+          <!-- grey, as iDrive's own question texts: the label disabled (RHMI property 1 = enabled) and not selectable (2) -->
+          <label id="841" model="754" text="Reset all values?"><properties><property id="1" value="false"/><property id="2" value="false"/></properties></label>
           <button id="842" action="731" model="755" text="Yes"/>
           <button id="843" action="732" model="756" text="No"/>
         </components>
