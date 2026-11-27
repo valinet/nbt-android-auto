@@ -949,8 +949,8 @@ enum { SUB_BOX_FIRST = 1, SUB_BOX_STEPS = 9 };
 enum { VOL_DARK = 10, VOL_LIGHT, VOL_EDGE, VOL_TRACK, VOL_CREAM, VOL_PALE };
 static const unsigned char g_vol_rgb[6][3] = {
     {26, 29, 31},     /* VOL_DARK: the panel */
-    {60, 66, 68},     /* VOL_LIGHT: the panel's row below its top edge */
-    {180, 190, 192},  /* VOL_EDGE: the bar's outline, the panel's top edge */
+    {83, 86, 87},     /* VOL_LIGHT: the panel's 1 px outline, as the box's: a quarter of the way to white */
+    {180, 190, 192},  /* VOL_EDGE: the bar's outline */
     {4, 8, 12},       /* VOL_TRACK: the bar's empty part */
     {250, 246, 196},  /* VOL_CREAM: the bar's fill */
     {252, 253, 246},  /* VOL_PALE: the fill's edges and bright end, the speaker */
@@ -973,11 +973,12 @@ static struct {
 static struct {
     long seq;          /* the last line's number; -1 = none read yet (the first is only the starting point) */
     int level, max, muted, type;
-    long long until;   /* shown until (monotonic ms) */
+    int fade;          /* the fade-out step in the frame, 0 = not fading */
+    long long until;   /* shown until (monotonic ms), then faded out */
     long long read_at; /* the file is read at most every VOL_POLL_MS */
     int off;           /* decoder.novolume */
     unsigned shown;    /* how many times, for the log */
-} g_vol = {-1, 0, 0, 0, 0, 0, 0, 0, 0};
+} g_vol = {-1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 /* a palette entry as OnSubPicturePalette reads it: Y, Cr, Cb (BT.601 video range), each colour channel truncated and
  * stored as a byte without clamping (outside 0-255 it wraps): the nearest entry that stays inside */
@@ -1260,7 +1261,10 @@ enum { VOL_W = 604, VOL_H = 84, VOL_SHOW_MS = 3000, VOL_POLL_MS = 50 };
 enum { VOL_ICON_X = 48, VOL_ICON_W = 22, VOL_ICON_H = 26 };
 enum { VOL_BAR_X = 108, VOL_BAR_Y = 11, VOL_BAR_W = VOL_W - VOL_BAR_X - 50, VOL_BAR_H = 22, VOL_GLOW = 12 };
 enum { VOL_TEXT_TOP = 40 };   /* the name's glyph box (its capitals from about 5 px lower) */
-enum { VOL_RADIUS = 3, VOL_ALPHA = 12 };   /* the panel's opacity (of 15): the map shows through, as on the photo */
+enum { VOL_RADIUS = PANEL_RADIUS, VOL_ALPHA = 12 };   /* corners as the box's; the panel's opacity (of 15) */
+/* dismissed: faded out in VOL_FADE_STEPS uploads over VOL_FADE_MS (user 2026-11-27) */
+enum { VOL_FADE_MS = 300, VOL_FADE_STEPS = 6 };
+static uint8_t g_vol_faded[VOL_W * VOL_H];
 static uint8_t g_vol_px[VOL_W * VOL_H];
 static uint8_t g_vol_text[VOL_W * VOL_H];   /* the name's coverage */
 
@@ -1324,16 +1328,20 @@ static int vol_speaker(double x, double y, int muted)
     return muted && seg_dist2(x, y, -1, 26, 22, 0) <= 1.21;
 }
 
-/* rounded corners: coverage of the pixel, 4 x 4 samples */
-static int vol_cover(int col, int row)
+/* rounded corners, as the box's (shape_samples): coverage of the pixel (of 16, 4 x 4 samples) by the shape, or by
+ * the same shape inset px inside it */
+static int vol_cover(int col, int row, double inset)
 {
     int in = 0;
+    const double r = VOL_RADIUS - inset;
     for (int sy = 0; sy < 4; ++sy)
         for (int sx = 0; sx < 4; ++sx) {
             const double x = col + (sx + 0.5) / 4, y = row + (sy + 0.5) / 4;
+            if (x < inset || y < inset || x > VOL_W - inset || y > VOL_H - inset)
+                continue;
             const double cx = x < VOL_RADIUS ? VOL_RADIUS : x > VOL_W - VOL_RADIUS ? VOL_W - VOL_RADIUS : x;
             const double cy = y < VOL_RADIUS ? VOL_RADIUS : y > VOL_H - VOL_RADIUS ? VOL_H - VOL_RADIUS : y;
-            in += (x - cx) * (x - cx) + (y - cy) * (y - cy) <= VOL_RADIUS * VOL_RADIUS;
+            in += (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
         }
     return in;
 }
@@ -1348,13 +1356,15 @@ static void vol_draw(int level, int max, int muted, int type)
     int fill = max > 0 ? (int)((double)inner * (level < 0 ? 0 : level > max ? max : level) / max + 0.5) : 0;
     for (int row = 0; row < VOL_H; ++row)
         for (int col = 0; col < VOL_W; ++col) {
-            const int cover = vol_cover(col, row);
-            int index, alpha = VOL_ALPHA;
-            /* the panel: a light top edge, a lighter row below it (a bevel), then the panel's colour */
-            index = row == 1 ? VOL_LIGHT : VOL_DARK;
-            if (row == 0) {
-                index = VOL_EDGE;
-                alpha = 9;
+            const int cover = vol_cover(col, row, 0), inner = vol_cover(col, row, 1);
+            int index, alpha;
+            {   /* the panel and its 1 px outline over it, as the box's (sub_box): the outline at least as opaque as
+                 * the panel, half way to opaque, a quarter of the way to white (VOL_LIGHT) */
+                const double a = VOL_ALPHA / 15.0, ola = (1 + a) / 2;
+                const double w = cover > 0 && cover > inner ? (double)(cover - inner) / cover : 0;
+                const double oa = ola * w, na = oa + a * (1 - oa);
+                index = na > 0 && oa / na >= 0.5 ? VOL_LIGHT : VOL_DARK;
+                alpha = (int)(na * 15 + 0.5);
             }
             const int bx = col - VOL_BAR_X, bry = row - by;
             if (bx >= 0 && bx < VOL_BAR_W && bry >= 0 && bry < VOL_BAR_H) {   /* the bar */
@@ -1408,8 +1418,8 @@ static void vol_policy(long long now)
             if (!first && g_win.shown == 1) {
                 if (g_vol.shown++ < 20)
                     say("volume: %d of %d%s", level, max, muted ? ", muted" : "");
-                if (!g_sub.vol_in || level != g_vol.level || max != g_vol.max || muted != g_vol.muted ||
-                    type != g_vol.type) {
+                if (!g_sub.vol_in || g_vol.fade || level != g_vol.level || max != g_vol.max ||
+                    muted != g_vol.muted || type != g_vol.type) {
                     vol_draw(level, max, muted, type);
                     sub_put(vol_x(), vol_y(), VOL_W, VOL_H, g_vol_px);
                 }
@@ -1418,13 +1428,26 @@ static void vol_policy(long long now)
                 g_vol.muted = muted;
                 g_vol.type = type;
                 g_vol.until = now + VOL_SHOW_MS;
+                g_vol.fade = 0;
                 g_sub.vol_in = 1;
             }
         }
     }
-    if (g_sub.vol_in && now >= g_vol.until) {
+    if (g_sub.vol_in && now >= g_vol.until + VOL_FADE_MS) {
         sub_put(vol_x(), vol_y(), VOL_W, VOL_H, 0);
         g_sub.vol_in = 0;
+        g_vol.fade = 0;
+    } else if (g_sub.vol_in && now >= g_vol.until) {   /* fading: each step its alpha scaled down */
+        const int step = 1 + (int)((now - g_vol.until) * VOL_FADE_STEPS / VOL_FADE_MS);   /* 1 .. VOL_FADE_STEPS */
+        if (step != g_vol.fade && step < VOL_FADE_STEPS) {
+            g_vol.fade = step;
+            const int keep = VOL_FADE_STEPS - step;
+            for (int i = 0; i < VOL_W * VOL_H; ++i) {
+                const int a = (g_vol_px[i] >> 4) * keep / VOL_FADE_STEPS;
+                g_vol_faded[i] = a ? (uint8_t)(a << 4 | (g_vol_px[i] & 15)) : 0;
+            }
+            sub_put(vol_x(), vol_y(), VOL_W, VOL_H, g_vol_faded);
+        }
     }
 }
 

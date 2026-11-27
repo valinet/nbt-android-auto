@@ -280,7 +280,7 @@ A box at x 875, y 96, 384x167 with a "Trip computer" title line (20 px from the 
 
 iDrive's own volume popup is behind Android Auto's / CarPlay's picture, so the decoder draws one into the picture, in
 the same subpicture as the trip box: the stock look (a photo of the car's screen, 2026-11-27), 604x84, centred, its
-middle at 2/3 of the height. A dark translucent panel with a light top edge, the speaker (crossed out when muted), a
+middle at 2/3 of the height. A dark translucent panel (corners and outline as the trip box's), the speaker (crossed out when muted), a
 dark bar with a light outline and a cream fill with a bright end, and below it "Entertainment" (bold DejaVu Sans) where
 the stock popup names the audio.
 
@@ -291,7 +291,8 @@ the stock popup names the audio.
   the starting point.
 - By hand: `echo "1 12 100 0 1" > /fs/ram3/nbt-aa-volume`, then the same with 2, 3, ...
 - Type 1 (the only one seen) is shown as "Entertainment", any other as "Volume".
-- Shown for 3 s after the last change (the stock popup's time is not measured), only while Android Auto's window is
-  shown (on iDrive's own pages iDrive's popup is visible).
+- Shown for 3 s after the last change (the stock popup's time is not measured), then faded out in 6 steps over
+  300 ms (6 uploads); only while Android Auto's window is shown (on iDrive's own pages iDrive's popup is visible).
+- Corners and outline as the trip box's: radius 16, a 1 px outline a quarter of the way from the panel to white.
 - Palette (16 entries for both): 0 transparent, 1..9 the box (its background to its text colour), 10..15 the popup's
   colours. The subpicture is taken out of the picture (`SubPictureAbort`) when neither is shown.
