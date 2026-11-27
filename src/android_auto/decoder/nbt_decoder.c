@@ -1767,11 +1767,28 @@ static int session_running(long long now)
     return g_win.running;
 }
 
+/* "Debug interaction" in iDrive's Advanced settings (user 2026-11-28): decoder.debuginteraction in the package keeps
+ * the picture hidden (the session, sound and input go on), so what iDrive does on our pages can be seen. Looked at
+ * once a second. */
+static int debug_interaction(long long now)
+{
+    static long long at;
+    static int on;
+    if (now >= at) {
+        at = now + 1000;
+        const int v = access(RT_DIR "/decoder.debuginteraction", F_OK) == 0;
+        if (v != on)
+            say("debug interaction %s: picture %s", v ? "on" : "off", v ? "kept hidden" : "as usual");
+        on = v;
+    }
+    return on;
+}
+
 static void window_policy(void)
 {
     const long long now = now_ms();
     /* a picture of this session first: the stream still holds the previous session's last one */
-    int show = g_win.last_picture && access(HIDDEN_FILE, F_OK) != 0 && session_running(now);
+    int show = g_win.last_picture && access(HIDDEN_FILE, F_OK) != 0 && session_running(now) && !debug_interaction(now);
     if (show && g_opt.stale_ms && now - g_win.last_picture >= g_opt.stale_ms) {
         if (!g_win.stale_said)
             say("window: no picture for %ld ms, hidden", g_opt.stale_ms);

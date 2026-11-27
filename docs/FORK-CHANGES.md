@@ -180,6 +180,7 @@ Multimedia -> **CarPlay & Android Auto** always opens the menu. Settings are fla
 | Advanced > Limit frame rate * | `decoder.30fps` (the phone is asked for 30 fps) | unticked | boot.sh |
 | Advanced > Show frame rate | `decoder.showfps` | unticked | nbt_decoder, every second |
 | Advanced > Display volume changes | `decoder.novolume` when unticked | ticked | nbt_decoder, every second |
+| Advanced > Debug interaction | `decoder.debuginteraction` | unticked | nbt_decoder, every second: the picture stays hidden (session, sound, input go on) to watch what iDrive does on our pages |
 | Advanced > Reboot | - | - | nbt_reset |
 | Settings > Reset | removes all of the above (and the older `anamorph`, `center800`, `classic`, `decoder.hw`, `start-at-boot.off`) | - | - |
 

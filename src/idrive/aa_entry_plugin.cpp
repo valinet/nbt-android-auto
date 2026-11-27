@@ -98,7 +98,8 @@ const unsigned kEntryState=10, kHoldState=13, kEvHold=52, kFocus=1, kVisible=11,
 //     [ ] Open widget automatically (panel-at-start), [ ] Use large widget (decoder.panelsize "full"),
 //     Advanced -> page 42: [ ] Use software decoder * (decoder.sw), [ ] Limit frame rate * (decoder.30fps: the phone
 //       is asked for 30 fps), [ ] Show frame rate (decoder.showfps, nbt_decoder's overlay), [x] Display volume changes
-//       (no decoder.novolume), Reboot (pages 33 / 34)
+//       (no decoder.novolume), [ ] Debug interaction (decoder.debuginteraction: nbt_decoder keeps the picture hidden,
+//       so iDrive's behaviour on our pages can be watched; 2026-11-28), Reboot (pages 33 / 34)
 //     Reset values -> page 44: Yes / No; Yes removes every flag below, then both go back to page 40 (focus event)
 // Checkboxes are raActions (PluginApp::addHandler(action, delegate)): the plugin flips the flag file and sets the
 // raBoolModel. Flags are read live by their users (native_service before every connection, nbt_knob on every NAV,
@@ -108,9 +109,9 @@ const unsigned kStatusState=14, kSettingsState=40, kAdvancedState=42, kResetStat
 const unsigned kUseModel=750, kListenButton=803, kPropEnabled=1;
 const unsigned kEvSettingsFirst=760, kEvSettingsCount=20;   // focus events back to page 40 (each used 10 times)
 enum Flag { kFlagGate, kFlagSplit, kFlagNavOff, kFlagPanelAuto, kFlagLarge, kFlagSw, kFlag30, kFlagFps, kFlagNoVolume,
-            kFlags };
+            kFlagDebug, kFlags };
 const char* const kFlagFile[kFlags]={"gate-on","split800","nav-off","panel-at-start","decoder.panelsize","decoder.sw",
-                                     "decoder.30fps","decoder.showfps","decoder.novolume"};
+                                     "decoder.30fps","decoder.showfps","decoder.novolume","decoder.debuginteraction"};
 // the files "Reset values" removes besides kFlagFile (older settings)
 const char* const kOldFlags[]={"anamorph","center800","classic","decoder.hw","start-at-boot.off"};
 void pkgPath(const char* name,char* out,size_t size) { snprintf(out,size,"%s%s",kPkgDir,name); }
@@ -135,7 +136,8 @@ void flagWrite(Flag f,bool on) {
 struct Box { unsigned action,model; Flag flag; bool tickedWhenSet; };
 const Box kBoxes[]={{702,790,kFlagGate,false},{711,792,kFlagSplit,false},{712,793,kFlagNavOff,false},
                     {713,794,kFlagPanelAuto,true},{714,795,kFlagLarge,true},{721,796,kFlagSw,true},
-                    {722,797,kFlag30,true},{723,798,kFlagFps,true},{724,799,kFlagNoVolume,false}};
+                    {722,797,kFlag30,true},{723,798,kFlagFps,true},{724,799,kFlagNoVolume,false},
+                    {725,789,kFlagDebug,true}};
 const int kBoxCount=sizeof(kBoxes)/sizeof(kBoxes[0]);
 const unsigned kListenAction=703, kListenModel=791, kResetYes=731, kResetNo=732;
 const unsigned kEvHoldAlt=54;                        // focus event to hold state 13 (fallback when 52 is ignored)

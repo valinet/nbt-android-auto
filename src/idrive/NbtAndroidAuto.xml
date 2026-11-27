@@ -24,6 +24,7 @@
       <raAction id="722"/>
       <raAction id="723"/>
       <raAction id="724"/>
+      <raAction id="725"/>
       <raAction id="731"/>
       <raAction id="732"/>
       <!-- "Reboot": page 33 asks, its button leads to the inert page 34, whose focus runs nbt_reset -->
@@ -45,6 +46,7 @@
       <textIdModel id="83" textId="22" preinst="false"/>
       <textIdModel id="84" textId="23" preinst="false"/>
       <textIdModel id="85" textId="24" preinst="false"/>
+      <raBoolModel id="789"/>
       <raBoolModel id="790"/>
       <raBoolModel id="791"/>
       <raBoolModel id="792"/>
@@ -616,6 +618,8 @@
           <checkbox id="832" action="722" model="797" text="Limit frame rate *"/>
           <checkbox id="833" action="723" model="798" text="Show frame rate"/>
           <checkbox id="834" action="724" model="799" text="Display volume changes"/>
+          <!-- the picture stays hidden (nbt_decoder), to watch what iDrive does on our pages -->
+          <checkbox id="835" action="725" model="789" text="Debug interaction"/>
           <button id="86" action="80" model="82" text="Reboot"/>
         </components>
       </hmiState>
