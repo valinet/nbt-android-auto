@@ -1,27 +1,21 @@
-// libNbtAndroidAuto.so - the "Android Auto" entry under Multimedia (HMI plugin, in the installed package).
+// libNbtAndroidAuto.so - the "CarPlay & Android Auto" entry under Multimedia (HMI plugin, in the installed package).
 //
-// The picture is not drawn by this page: nbt_hwvideo shows the hardware video window in front of the HMI (the very
-// first version used a WAL sprite, see experiments/wal-overlay; some comments below still say so). This page
-//   - opening it creates /fs/ram3/nbt-aa-request (native_service waits for it only with gate.mode, now opt-in: $P/gate-on)
-//   - shows the connection status (from /fs/ram3/nbt-aa-state, written by native_service at least every 2 s):
-//       no phone / phone found, starting / replug needed / device without Android Auto / several devices / service down
-//   - brings Android Auto to the front as soon as it runs: iDrive is moved to the inert hold state 13 (focusEvent 52),
-//     where controller turns / pushes / tilts do nothing in iDrive (nbt_knob forwards them to the phone), and the overlay
-//     is shown (/fs/ram3/nbt-aa-hidden removed). Same idea as the NBT-AAD reference rhmiapp state 13 and iDrive's own
-//     ST_CarPlay state.
-//   - while Android Auto runs, the menu entry itself leads straight to the deepest hold state (2026-11-12): its action
-//     takes the target from model 5 (raIntModel), which a poller sets to 20 or 10. Car 2026-11-12: after a while iDrive
-//     ignored every focus event 52/54 (the entry page lost the focus, no hold state got it, until a reboot), so opening
-//     the entry no longer depends on them. The poller starts with the first focus event of one of our pages (posts from
-//     create() did not run on this HMI); until then the entry page and its focus event do the job as before.
-//   - BACK (or a tilt iDrive treats as back) pops iDrive from 13 to the entry page 10: while Android Auto runs the press
-//     belonged to the phone, so iDrive is put straight back on 13 (the presenter waits 300 ms before hiding: no blink).
-//   - MENU / MEDIA / NAV / COM / MAP / OPTION leave the page the iDrive way: the overlay hides, the session keeps running
-//     in the background. Multimedia -> CarPlay / Android Auto then brings the running session to the front at once.
-//   - "Start at boot: on/off" (inert page 35): switches the flag file start-at-boot.off in the package; nbt_knob reads it
-//     when the first session of a boot runs and then brings the picture to the front (show request) - or not.
-//   - "Restart system" (page 33 asks, its button leads to the inert page 34): reboots the head unit with nbt_reset
-//     (UDS 11 01 through the gateway), formerly the separate NbtReboot plugin ("Restart iDrive" under Multimedia).
+// The picture is not drawn by this page: nbt_decoder shows the car's video window in front of the HMI. This plugin
+//   - the menu (page 10, user 2026-11-27; see "the menu" below): "Use CarPlay / Android Auto", "Connect automatically",
+//     "Listen to audio", Settings (40) with Advanced (42) and "Reset values" (44)
+//   - "Use ..." without a session: the status page 14 creates /fs/ram3/nbt-aa-request (native_service waits for it while
+//     "Connect automatically" is off: gate-on in the package) and shows the connection status (from /fs/ram3/nbt-aa-state,
+//     written by native_service at least every 2 s)
+//   - brings Android Auto / CarPlay to the front: iDrive is moved to the inert hold state 13, where controller turns /
+//     pushes / tilts do nothing in iDrive (nbt_knob forwards them to the phone), and the picture is shown
+//     (/fs/ram3/nbt-aa-hidden removed). Same idea as the NBT-AAD reference rhmiapp state 13 and iDrive's own ST_CarPlay
+//     state.
+//   - BACK (or a tilt iDrive treats as back) pops iDrive out of 13: while Android Auto runs the press belonged to the
+//     phone, so iDrive is put straight back on 13 (the presenter waits 300 ms before hiding: no blink).
+//   - MENU / MEDIA / NAV / COM / MAP / OPTION leave the page the iDrive way: the picture hides, the session keeps running
+//     in the background; "Use ..." brings it back at once.
+//   - "Reboot" (Advanced; page 33 asks, its button leads to the inert page 34): reboots the head unit with nbt_reset
+//     (UDS 11 01 through the gateway).
 // Hold states 13..20 are nested (see "hold states" below). Loop guard: at most 10 hold events per minute.
 // ABI as in experiments/png-pipeline/dynamic_image_plugin.cpp (vehicle-tested PluginApp ctor, addHandler(state,1,...) focus events, post()).
 // Checked in this car's libraries: PluginApp::triggerEvent(unsigned), updateModel(unsigned, TextID const&),
@@ -65,6 +59,10 @@ public:
     void updateModel(unsigned,const TextID&);
     void updateModel(unsigned,int);   // _ZN3bmw9PluginApp11updateModelEji (in this car's libAppFramework.A.so)
     void addHandler(unsigned,unsigned,const ActionDelegate&);
+    // _ZN3bmw9PluginApp10addHandlerEjRKNS_8DelegateIbRKNS_6ParcelEvvvEE: an raAction's handler (the command map that
+    // PluginApp::invokeCommand(action id, parcel) calls, libAppFramework.A.so 2026-11-27)
+    void addHandler(unsigned,const ActionDelegate&);
+    void updateModel(unsigned,bool);  // raBoolModel (checkbox)
     // this car's libAppFramework.A.so (2026-11-17): start() = state 0/4 -> 1 + PluginAppHandler::start() (the queue of
     // post()ed runnables is served from then on); the HMI calls it only when the page is first opened.
     bool start();
@@ -88,46 +86,58 @@ const char* const kLeave="/fs/ram3/nbt-aa-leave";
 const char* const kBackKey="/fs/ram3/nbt-aa-back";
 const char* const kGuard="/fs/ram3/nbt-aa-guard";   // nbt_knob's BACK guard (tilt right on the driver's BACK)
 const unsigned kEntryState=10, kHoldState=13, kEvHold=52, kFocus=1, kVisible=11, kStatusModel=4;
-// picture mode selection (2026-11-08): buttons on page 10 lead to the inert states 30 (16:9) / 31 (widescreen); their
-// focus handler stores the mode, restarts the service and sends focus event 53 back to page 10
-const unsigned kMode169State=30, kModeWideState=31, kEvEntry=53, kModel169=6, kModelWide=7;
-const unsigned kRestartState=32;                     // "Restart service" -> inert page 32, back to 10
-const unsigned kBootState=35, kBootModel=91;         // "Start at boot" -> inert page 35, back to 10
-const char* const kBootOff="/var/opt/hmi/data/rw/NbtAndroidAutoRT/start-at-boot.off";
-bool bootOn() { return access(kBootOff,F_OK)!=0; }   // default: on (no file)
-// "Show widget at startup" (user 2026-11-23, was "Trip computer"): only in full width (the box is not shown in split screen anyway; the
-// button is made invisible there, RHMI property 3). On: panel-at-start exists in the package, and nbt_decoder shows the
-// box at every session start (off: hidden until long NAV). Default: off (no file).
-const unsigned kPanelState=36, kPanelModel=97, kPanelButton=96, kPropVisible=3;
-const char* const kPanelAtStart="/var/opt/hmi/data/rw/NbtAndroidAutoRT/panel-at-start";
-bool panelOn() { return access(kPanelAtStart,F_OK)==0; }
-// "Decoder: Software / Hardware" (user 2026-11-23, default Software): decoder.hw in the package. nbt_decoder runs for the
-// whole service lifetime, so the switch restarts the Android Auto service (as the picture mode does): boot.sh copies
-// the flag and native_service starts nbt_decoder with or without --hw; the phone reconnects to the new decoder.
-const unsigned kDecoderState=37, kDecoderModel=103;
-const char* const kDecoderHw="/var/opt/hmi/data/rw/NbtAndroidAutoRT/decoder.hw";
-bool decoderHw() { return access(kDecoderHw,F_OK)==0; }
-// "Widget size: Full width / Small / Trip only / Car only" (user 2026-11-23): full width only, like "Show widget at
-// startup". decoder.panelsize in the package: "full" = the full box (384 px), none (default) or "small" = 256 px with
-// the pages Trip and Car (long NAV: page 1, page 2, off), "trip" / "car" = 256 px with only that page (long NAV: on,
-// off). Each press takes the next one; nbt_decoder reads it when a session starts, nbt_knob at each long NAV.
-const unsigned kSizeState=38, kSizeModel=108, kSizeButton=107;
-const char* const kPanelSize="/var/opt/hmi/data/rw/NbtAndroidAutoRT/decoder.panelsize";
-int panelSize() {   // 0 full width, 1 small, 2 trip only, 3 car only
-    char b[16]={0};
-    const int fd=open(kPanelSize,O_RDONLY);
-    if(fd<0)return 1;                                  // default: small
-    const int n=read(fd,b,sizeof(b)-1);
+// --- the menu (user 2026-11-27): Multimedia -> "CarPlay & Android Auto" always opens page 10:
+//   "Use CarPlay / Use Android Auto" (button 801, model 750: by the phone's kind) -> hold state 13 while a session runs,
+//     else the status page 14 (target model 5); page 14 asks native_service for the phone (kRequest) and goes on to 13
+//     as soon as the session runs
+//   [x] Connect automatically (802 / model 790): no gate-on in the package; unticked = the phone waits for "Use ..."
+//   [x] Listen to audio (803 / 791): ticked while the main source is Android Auto's / CarPlay's (nbt_knob's
+//     nbt-aa-source vs nbt-aa-auxsource); a click asks nbt_knob (nbt-aa-listen) for that source and play; greyed out
+//     without a session
+//   Settings (804) -> page 40: [x] Display as full screen * (no split800), [x] Show using NAV button (no nav-off),
+//     [ ] Open widget automatically (panel-at-start), [ ] Use large widget (decoder.panelsize "full"),
+//     Advanced -> page 42: [ ] Use software decoder * (decoder.sw), [ ] Limit frame rate * (decoder.30fps: the phone
+//       is asked for 30 fps), [ ] Show frame rate (decoder.showfps, nbt_decoder's overlay), [x] Display volume changes
+//       (no decoder.novolume), Reboot (pages 33 / 34)
+//     Reset values -> page 44: Yes / No; Yes removes every flag below, then both go back to page 40 (focus event)
+// Checkboxes are raActions (PluginApp::addHandler(action, delegate)): the plugin flips the flag file and sets the
+// raBoolModel. Flags are read live by their users (native_service before every connection, nbt_knob on every NAV,
+// nbt_decoder every second); those marked * (in the text) only apply after a reboot.
+const char* const kPkgDir="/var/opt/hmi/data/rw/NbtAndroidAutoRT/";
+const unsigned kStatusState=14, kSettingsState=40, kAdvancedState=42, kResetState=44;
+const unsigned kUseModel=750, kListenButton=803, kPropEnabled=1;
+const unsigned kEvSettingsFirst=760, kEvSettingsCount=20;   // focus events back to page 40 (each used 10 times)
+enum Flag { kFlagGate, kFlagSplit, kFlagNavOff, kFlagPanelAuto, kFlagLarge, kFlagSw, kFlag30, kFlagFps, kFlagNoVolume,
+            kFlags };
+const char* const kFlagFile[kFlags]={"gate-on","split800","nav-off","panel-at-start","decoder.panelsize","decoder.sw",
+                                     "decoder.30fps","decoder.showfps","decoder.novolume"};
+// the files "Reset values" removes besides kFlagFile (older settings)
+const char* const kOldFlags[]={"anamorph","center800","classic","decoder.hw","start-at-boot.off"};
+void pkgPath(const char* name,char* out,size_t size) { snprintf(out,size,"%s%s",kPkgDir,name); }
+bool flagSet(Flag f) {
+    char path[128];pkgPath(kFlagFile[f],path,sizeof(path));
+    if(f!=kFlagLarge)return access(path,F_OK)==0;
+    char b[16]={0};const int fd=open(path,O_RDONLY);   // decoder.panelsize: "full" = large
+    if(fd<0)return false;
+    const int n=read(fd,b,sizeof(b)-1);close(fd);
+    return n>=4&&!strncmp(b,"full",4);
+}
+void flagWrite(Flag f,bool on) {
+    char path[128];pkgPath(kFlagFile[f],path,sizeof(path));
+    if(!on){unlink(path);return;}
+    const int fd=open(path,O_WRONLY|O_CREAT|O_TRUNC,0644);
+    if(fd<0)return;
+    if(f==kFlagLarge)write(fd,"full\n",5);
     close(fd);
-    if(n<=0)return 1;
-    return !strncmp(b,"full",4)?0:!strncmp(b,"trip",4)?2:!strncmp(b,"car",3)?3:1;
+    if(f==kFlagSplit){char a[128];pkgPath("anamorph",a,sizeof(a));unlink(a);}
 }
-void setPanelSize(int v) {
-    static const char* const name[4]={"full\n","","trip\n","car\n"};
-    if(v<0||v>3||v==1){unlink(kPanelSize);return;}     // small: the default, no file
-    const int fd=open(kPanelSize,O_WRONLY|O_CREAT|O_TRUNC,0644);
-    if(fd>=0){write(fd,name[v],strlen(name[v]));close(fd);}
-}
+// a checkbox: its action, raBoolModel, flag, and whether ticked means the flag is there (else: absent)
+struct Box { unsigned action,model; Flag flag; bool tickedWhenSet; };
+const Box kBoxes[]={{702,790,kFlagGate,false},{711,792,kFlagSplit,false},{712,793,kFlagNavOff,false},
+                    {713,794,kFlagPanelAuto,true},{714,795,kFlagLarge,true},{721,796,kFlagSw,true},
+                    {722,797,kFlag30,true},{723,798,kFlagFps,true},{724,799,kFlagNoVolume,false}};
+const int kBoxCount=sizeof(kBoxes)/sizeof(kBoxes[0]);
+const unsigned kListenAction=703, kListenModel=791, kResetYes=731, kResetNo=732;
 const unsigned kEvHoldAlt=54;                        // focus event to hold state 13 (fallback when 52 is ignored)
 // The real reason iDrive "ignored" 52 / 54 (car 2026-11-18, HmiMain3D CFocusEvent::perform @0x88fd70b): every focus
 // event object counts its performs and refuses from the 12th on ("FocusEvent counter > 10"; never reset, only apps with
@@ -137,9 +147,7 @@ const unsigned kEvPoolFirst=200, kEvPoolCount=500, kEvPoolUses=10;   // 500 (use
 // text ids in NbtAndroidAuto_ALL_Texts.zip (make_aa_entry_resources.py)
 enum { kTxtConnectUsb=2, kTxtNoPhone=3, kTxtStarting=4, kTxtRunning=5, kTxtReplug=6, kTxtUnsupported=7,
        kTxtServiceDown=8, kTxtSeveral=9, kTxt169=11, kTxtWide=12, kTxt169On=16, kTxtWideOn=17,
-       kTxtBootOn=31, kTxtBootOff=32, kTxtPanelOn=35, kTxtPanelOff=36,
-       kTxtDecoderSw=38, kTxtDecoderHw=39, kTxtSizeFull=41 /* 41..44: full width, small, trip only, car only */,
-       kTxtReboot=46 };
+       kTxtReboot=46, kTxtUseAny=47, kTxtUseCarPlay=48, kTxtUseAndroid=49 };
 void touch(const char* path) { int fd=open(path,O_WRONLY|O_CREAT|O_TRUNC,0644); if(fd>=0)close(fd); }
 // --- automatic start of the Android Auto service (boot.sh of the persistent package), like the NBT-AAD reference:
 // QNX spawn() into a new process group, no zombie, stdin/out/err /dev/null. Rate-limited to one start per 30 s.
@@ -165,49 +173,9 @@ void launchService() {
     spawn("/bin/sh",3,fdmap,&inh,argv,envp);
     close(nul);
 }
-// --- picture mode: flag file in the persistent package (read by boot.sh). split800 = "16:9" (1:1 at the left, iDrive
-// split screen on the right), anamorph = "widescreen" (default when no flag exists). The service is restarted so the
-// new mode applies; the phone negotiates its video format at the next connection.
-const char* const kPkg="/var/opt/hmi/data/rw/NbtAndroidAutoRT";
-bool modeIs169() { return access("/var/opt/hmi/data/rw/NbtAndroidAutoRT/split800",F_OK)==0; }
-long g_lastMode=0;
-// set when page 10 got the focus in this boot: the mode / restart buttons sit on it, so a real press always comes after
-// it, while a mode page the HMI restores at boot does not (replaces the former "nothing in the first 60 s" guard)
+// set when page 10 got the focus in this boot (pages the HMI restores at boot do not count)
 bool g_entrySeen=false;
 void plog(const char* what,int a);
-// restart of the Android Auto service (not the head unit): stop native_service, wait for its lock to go, run boot.sh.
-// flag = new picture mode flag file, or 0 to keep the mode (restart button, user request 2026-11-08: recovery when
-// Android Auto shows "connected" but the picture does not come)
-void restartService(const char* flag) {
-    long t=mono_s();
-    if(!g_entrySeen){plog("restart ignored: page 10 not opened in this boot (restored state)",0);return;}
-    if(g_lastMode&&t-g_lastMode<10){plog("restart ignored: less than 10 s after the last one",0);return;}
-    g_lastMode=t;
-    int nul=open("/dev/null",O_RDWR);
-    if(nul<0)return;
-    int fdmap[3]={nul,nul,nul};
-    struct inheritance inh;
-    memset(&inh,0,sizeof(inh));
-    inh.flags=SPAWN_SETGROUP|SPAWN_SETSIGDEF|SPAWN_SETSIGMASK|SPAWN_NOZOMBIE;
-    inh.pgroup=SPAWN_NEWPGROUP;
-    sigfillset(&inh.sigdefault);
-    sigemptyset(&inh.sigmask);
-    char cmd[512];
-    char modeCmd[96]="";
-    if(flag)snprintf(modeCmd,sizeof(modeCmd),"rm -f anamorph center800 split800 classic; touch %s; ",flag);
-    snprintf(cmd,sizeof(cmd),"cd %s || exit 1; %s"
-             "slay -f -Q -s TERM native_service; i=0; while test -e /fs/ram3/nbt-aa-native/service.lock -a $i -lt 20; "
-             "do sleep 1; i=$((i+1)); done; slay -f -Q -s KILL native_service; rm -f /fs/ram3/nbt-aa-native/service.lock; "
-             "sh %s",kPkg,modeCmd,kBoot);
-    char* argv[]={(char*)"/bin/sh",(char*)"-c",cmd,0};
-    // restart.sh of the package (2026-11-09) does the same after a diagnostic snapshot; the inline command is the fallback
-    const char* const script="/var/opt/hmi/data/rw/NbtAndroidAutoRT/restart.sh";
-    char* argvScript[]={(char*)"/bin/sh",(char*)script,(char*)(flag?flag:""),0};
-    char* envp[]={(char*)"PATH=/bin:/usr/bin:/sbin:/usr/sbin:/opt/sys/bin",0};
-    spawn("/bin/sh",3,fdmap,&inh,access(script,R_OK)==0?argvScript:argv,envp);
-    close(nul);
-}
-void setMode(bool split) { restartService(split?"split800":"anamorph"); }
 // started once from create(): factory-time posts did not run on this HMI (2026-11-06), so a detached thread waits
 // no delay (user 2026-11-12): boot.sh is started as soon as the HMI has created the plugin
 void* autostartThread(void*) { launchService(); return 0; }
@@ -239,6 +207,7 @@ static unsigned statusText(const char* buf, bool* running) {
     return kTxtConnectUsb;
 }
 // reads native_service's public status; returns the text to show, *running = Android Auto session active
+int g_phoneKind=0;   // native_service's kind=: 0 unknown, 1 Android, 2 CarPlay
 unsigned readStatus(bool* running) {
     *running=false;
     struct stat st;
@@ -246,6 +215,7 @@ unsigned readStatus(bool* running) {
     char buf[160]; int fd=open(kState,O_RDONLY); if(fd<0) return kTxtServiceDown;
     ssize_t n=read(fd,buf,sizeof(buf)-1); close(fd); if(n<=0) return kTxtServiceDown; buf[n]=0;
     const unsigned text=statusText(buf,running);
+    g_phoneKind=strstr(buf,"kind=carplay")?2:strstr(buf,"kind=android")?1:0;
     // 2026-11-24: a setting change started nbt_decoder again, its picture comes back only after a reboot ("Restart
     // system" below on the same page)
     return strstr(buf,"reboot=1")?kTxtReboot:text;
@@ -283,12 +253,19 @@ public:
     void run();
 };
 struct HoldSlot { Entry* e; unsigned idx; };
-// sends focus event 53 (back to page 10) after a mode choice
-class BackToEntry : public bmw::Runnable {
+// back to page 40 after "Reset values" (Yes or No): one of kEvSettingsCount focus events, each used 10 times (iDrive
+// performs a focus event at most 11 times per HMI start, see kEvPoolFirst)
+class BackToSettings : public bmw::Runnable {
 public:
-    bmw::PluginApp* app;
-    BackToEntry():app(0) {}
-    void run() { if(app){plog("mode chosen -> back to page 10");app->triggerEvent(kEvEntry);} }
+    bmw::PluginApp* app; unsigned idx,uses;
+    BackToSettings():app(0),idx(0),uses(0) {}
+    void run() {
+        if(!app)return;
+        if(uses>=10){idx=(idx+1)%kEvSettingsCount;uses=0;}
+        ++uses;
+        plog("back to the settings page, focus event",(int)(kEvSettingsFirst+idx));
+        app->triggerEvent(kEvSettingsFirst+idx);
+    }
 };
 // Show request (2026-11-17, to replace favourite 8): a program creates /fs/ram3/nbt-aa-show; the poll below removes it
 // and, while Android Auto runs, sends the hold focus event (52/54, through hold(): rate limit and loop guard apply) to
@@ -438,25 +415,29 @@ const unsigned kTargetModel=5;
 class TargetPoll : public bmw::Runnable {
 public:
     bmw::PluginApp* app; Entry* e; bool active; int target;
-    TargetPoll():app(0),e(0),active(false),target(10) {}
+    TargetPoll():app(0),e(0),active(false),target(kStatusState) {}
     void start() { if(!active&&app){active=true;app->post(this,0);} }
     void run();
 };
+struct BoxSlot { Entry* e; int i; };
 class Entry : public bmw::Runnable {
 public:
+    BoxSlot boxSlots[kBoxCount];
     bmw::PluginApp* app;
-    bool stopping, polling, entryFocused, running;
-    unsigned focusMask, visibleMask;
-    unsigned shownText; int shownMode, shownBoot, shownPanel, shownPanelVis, shownDecoder, shownSize; long long lastBootToggleMs, lastPanelToggleMs, lastSizeToggleMs; long window; unsigned holds, ignoredHolds; long lastSideHold, lastAutoHold; long long lastSideHoldMs, lastHoldMs, lastFocusMs;
+    bool stopping, polling, statusFocused, running;
+    unsigned focusMask, visibleMask, menuMask;   // menuMask: our menu pages with the focus (1 menu, 2 settings, 4 advanced, 8 reset)
+    unsigned shownText, shownUse; int shownBox[kBoxCount], shownListen, shownListenEnabled;
+    long window; unsigned holds, ignoredHolds; long lastSideHold, lastAutoHold; long long lastSideHoldMs, lastHoldMs, lastFocusMs, lastBoxMs;
     Checker checker;
     Verifier verifier;
-    BackToEntry back;
+    BackToSettings back;
     TargetPoll target;
     HoldSlot slots[kHoldCount];
-    Entry():app(0),stopping(false),polling(false),entryFocused(false),running(false),focusMask(0),visibleMask(0),
-            shownText(0),shownMode(0),shownBoot(0),shownPanel(0),shownPanelVis(-1),shownDecoder(0),shownSize(0),lastBootToggleMs(-100000),lastPanelToggleMs(-100000),lastSizeToggleMs(-100000),window(0),holds(0),ignoredHolds(0),lastSideHold(0),lastAutoHold(0),lastSideHoldMs(-100000),lastHoldMs(-100000),lastFocusMs(0),showUntilMs(0),showRetryAtMs(0),evIdx(kEvPoolCount-1),evUses(kEvPoolUses),evIgnoredSeen(0) {
+    Entry():app(0),stopping(false),polling(false),statusFocused(false),running(false),focusMask(0),visibleMask(0),menuMask(0),
+            shownText(0),shownUse(0),shownListen(-1),shownListenEnabled(-1),window(0),holds(0),ignoredHolds(0),lastSideHold(0),lastAutoHold(0),lastSideHoldMs(-100000),lastHoldMs(-100000),lastFocusMs(0),lastBoxMs(-100000),showUntilMs(0),showRetryAtMs(0),evIdx(kEvPoolCount-1),evUses(kEvPoolUses),evIgnoredSeen(0) {
         checker.e=this; verifier.e=this; target.e=this;
         for(unsigned i=0;i<kHoldCount;++i){slots[i].e=this;slots[i].idx=i;}
+        for(int i=0;i<kBoxCount;++i){shownBox[i]=-1;boxSlots[i].e=this;boxSlots[i].i=i;}
     }
     bool holdFocused() const { return focusMask!=0; }
     bool holdVisible() const { return visibleMask!=0; }
@@ -489,141 +470,118 @@ public:
         app->triggerEvent(ev);
         verify();
     }
-    // HMI thread, every 500 ms while our page has focus: status text; a slow retry (every 10 s) when the entry page shows
-    // while Android Auto runs and the last hold attempt did not take
-    void run() {
-        if(stopping||!app){polling=false;return;}
-        if(!entryFocused&&!holdFocused()){polling=false;return;}
-        unsigned text=readStatus(&running);
-        if(text!=shownText){bmw::TextID tx(text);app->updateModel(kStatusModel,tx);shownText=text;}
-        int mode=modeIs169()?1:2;
-        if(mode!=shownMode){
-            bmw::TextID a(mode==1?kTxt169On:kTxt169),b(mode==2?kTxtWideOn:kTxtWide);
-            app->updateModel(kModel169,a);app->updateModel(kModelWide,b);shownMode=mode;
+    // "Listen to audio": the main source is Android Auto's / CarPlay's (nbt_knob's files)
+    static bool onAaSource() {
+        char a[16]={0},b[16]={0};
+        int fd=open("/fs/ram3/nbt-aa-source",O_RDONLY);if(fd<0)return false;
+        read(fd,a,sizeof(a)-1);close(fd);
+        fd=open("/fs/ram3/nbt-aa-auxsource",O_RDONLY);
+        if(fd>=0){read(fd,b,sizeof(b)-1);close(fd);}else strcpy(b,"00bb");
+        return strtoul(a,0,16)==strtoul(b,0,16)&&strncmp(a,"none",4)!=0;
+    }
+    // the menu pages' models: each only when it changed
+    void showModels(bool force) {
+        if(force){shownUse=0;shownListen=shownListenEnabled=-1;for(int i=0;i<kBoxCount;++i)shownBox[i]=-1;}
+        const unsigned use=g_phoneKind==2?kTxtUseCarPlay:g_phoneKind==1?kTxtUseAndroid:kTxtUseAny;
+        if(use!=shownUse){bmw::TextID tu(use);app->updateModel(kUseModel,tu);shownUse=use;}
+        for(int i=0;i<kBoxCount;++i){
+            const int v=flagSet(kBoxes[i].flag)==kBoxes[i].tickedWhenSet?1:0;
+            if(v!=shownBox[i]){app->updateModel(kBoxes[i].model,v!=0);shownBox[i]=v;}
         }
-        int boot=bootOn()?1:2;
-        if(boot!=shownBoot){bmw::TextID tb(boot==1?kTxtBootOn:kTxtBootOff);app->updateModel(kBootModel,tb);shownBoot=boot;}
-        int dec=decoderHw()?1:2;
-        if(dec!=shownDecoder){bmw::TextID td(dec==1?kTxtDecoderHw:kTxtDecoderSw);app->updateModel(kDecoderModel,td);shownDecoder=dec;}
-        int panel=panelOn()?1:2;
-        if(panel!=shownPanel){bmw::TextID tp(panel==1?kTxtPanelOn:kTxtPanelOff);app->updateModel(kPanelModel,tp);shownPanel=panel;}
-        int size=panelSize()+1;
-        if(size!=shownSize){bmw::TextID tz(kTxtSizeFull+size-1);app->updateModel(kSizeModel,tz);shownSize=size;}
-        const int vis=mode==2?1:0;   // only in full width
-        if(vis!=shownPanelVis){
+        const int listen=running&&onAaSource()?1:0;
+        if(listen!=shownListen){app->updateModel(kListenModel,listen!=0);shownListen=listen;}
+        const int en=running?1:0;
+        if(en!=shownListenEnabled){
             static bmw::Parcel* yes=new bmw::Parcel(true);
             static bmw::Parcel* no=new bmw::Parcel(false);
-            app->setProperty(kPanelButton,kPropVisible,vis?*yes:*no);
-            app->setProperty(kSizeButton,kPropVisible,vis?*yes:*no);
-            shownPanelVis=vis;
-            plog("widget buttons visible",vis);
+            app->setProperty(kListenButton,kPropEnabled,en?*yes:*no);
+            shownListenEnabled=en;
         }
+    }
+    // HMI thread, every 500 ms while one of our pages has the focus: status text, the menu's models
+    void run() {
+        if(stopping||!app){polling=false;return;}
+        if(!statusFocused&&!holdFocused()&&!menuMask){polling=false;return;}
+        unsigned text=readStatus(&running);
+        if(text!=shownText){bmw::TextID tx(text);app->updateModel(kStatusModel,tx);shownText=text;}
+        showModels(false);
         long t=now_s();
-        if(running&&entryFocused&&!holdFocused()&&t-lastAutoHold>=10){lastAutoHold=t;hold("hold (entry page, retry)");}
+        if(running&&statusFocused&&!holdFocused()&&t-lastAutoHold>=10){lastAutoHold=t;hold("hold (status page, retry)");}
         app->post(this,500);
     }
     void startPolling(unsigned delay) { if(!polling&&!stopping){polling=true;app->post(this,delay);} }
-    static bool entryFocus(void* self,const bmw::Parcel& p) {
+    // page 10 (the menu), 40 (settings), 42 (advanced), 44 (reset): models up to date while one is on screen
+    static bool menuFocusBit(Entry* e,const bmw::Parcel& p,unsigned bit,const char* what) {
+        bool focused=false;p.readBool(focused);
+        if(focused)e->menuMask|=bit; else e->menuMask&=~bit;
+        e->lastFocusMs=now_ms();
+        e->target.start();
+        plog(what,focused);
+        if(focused&&!e->stopping){
+            if(bit==1){g_entrySeen=true;unlink(kLeave);if(readStatus(&e->running)==kTxtServiceDown)launchService();}
+            e->showModels(true);
+            e->startPolling(50);
+        }
+        return true;
+    }
+    static bool entryFocus(void* self,const bmw::Parcel& p) { return menuFocusBit(static_cast<Entry*>(self),p,1,"menu focus"); }
+    static bool settingsFocus(void* self,const bmw::Parcel& p) { return menuFocusBit(static_cast<Entry*>(self),p,2,"settings focus"); }
+    static bool advancedFocus(void* self,const bmw::Parcel& p) { return menuFocusBit(static_cast<Entry*>(self),p,4,"advanced focus"); }
+    static bool resetFocus(void* self,const bmw::Parcel& p) { return menuFocusBit(static_cast<Entry*>(self),p,8,"reset page focus"); }
+    // page 14 ("Use ..." without a session): the phone for us now, on to Android Auto / CarPlay once it runs
+    static bool statusFocus(void* self,const bmw::Parcel& p) {
         Entry* e=static_cast<Entry*>(self);
         bool focused=false;p.readBool(focused);
-        e->entryFocused=focused;e->lastFocusMs=now_ms();
+        e->statusFocused=focused;e->lastFocusMs=now_ms();
         e->target.start();
-        plog("entry focus",focused);
-        if(focused)g_entrySeen=true;
+        plog("status page focus",focused);
         if(focused&&!e->stopping){
-            unlink(kLeave);                    // the driver came back on purpose
+            unlink(kLeave);                    // the driver came on purpose
             touch(kRequest);
             if(readStatus(&e->running)==kTxtServiceDown)launchService();   // service not running: start it now
             e->startPolling(50);if(e->running)e->check(30);
         }
         return true;
     }
-    // mode pages 30 / 31: store the mode, restart the service, back to page 10
-    static bool mode169Focus(void* self,const bmw::Parcel& p) { return modeFocus(static_cast<Entry*>(self),p,true); }
-    static bool modeWideFocus(void* self,const bmw::Parcel& p) { return modeFocus(static_cast<Entry*>(self),p,false); }
-    static bool modeFocus(Entry* e,const bmw::Parcel& p,bool split) {
-        bool focused=false;p.readBool(focused);
-        plog(split?"mode page split screen focus":"mode page full width focus",focused);
-        if(focused&&!e->stopping){setMode(split);e->shownMode=0;e->app->post(&e->back,400);}
-        return true;
-    }
-    // page 37: switch the decoder (Software / Hardware), restart the service, back to page 10 (guards as restartService)
-    static bool decoderFocus(void* self,const bmw::Parcel& p) {
-        Entry* e=static_cast<Entry*>(self);
-        bool focused=false;p.readBool(focused);
-        plog("decoder page focus",focused);
-        if(!focused||e->stopping)return true;
-        if(!g_entrySeen)plog("decoder ignored: page 10 not opened in this boot (restored state)",0);
-        else if(g_lastMode&&now_s()-g_lastMode<10)plog("decoder ignored: less than 10 s after the last restart",0);
-        else{
-            if(decoderHw())unlink(kDecoderHw); else touch(kDecoderHw);
-            plog("decoder hardware now",decoderHw()?1:0);
-            restartService(0);
-            e->holds=0;e->window=now_s();e->lastSideHoldMs=-100000;
-        }
-        e->shownDecoder=0;e->app->post(&e->back,400);
-        return true;
-    }
-    // page 36: switch "Trip computer at start", back to page 10 (as page 35)
-    static bool panelFocus(void* self,const bmw::Parcel& p) {
-        Entry* e=static_cast<Entry*>(self);
-        bool focused=false;p.readBool(focused);
-        plog("trip computer page focus",focused);
-        if(!focused||e->stopping)return true;
+    // a checkbox (raAction): flip its flag, tick it as the flag now says (one press per 300 ms)
+    static bool boxAction(void* self,const bmw::Parcel&) {
+        BoxSlot* slot=static_cast<BoxSlot*>(self);
+        Entry* e=slot->e;
+        const Box& b=kBoxes[slot->i];
         const long long tm=now_ms();
-        if(!g_entrySeen)plog("trip computer ignored: page 10 not opened in this boot (restored state)",0);
-        else if(tm-e->lastPanelToggleMs<2000)plog("trip computer ignored: switched just before",0);
-        else{
-            e->lastPanelToggleMs=tm;
-            if(panelOn())unlink(kPanelAtStart); else touch(kPanelAtStart);
-            plog("trip computer at start now",panelOn()?1:0);
-        }
-        e->shownPanel=0;e->app->post(&e->back,400);
+        if(tm-e->lastBoxMs<300){plog("checkbox ignored: pressed just before",(int)b.action);return true;}
+        e->lastBoxMs=tm;
+        flagWrite(b.flag,!flagSet(b.flag));
+        plog("checkbox, action",(int)b.action);
+        plog("  ticked now",flagSet(b.flag)==b.tickedWhenSet?1:0);
+        e->showModels(false);
         return true;
     }
-    // page 38: the next widget size, back to page 10 (as page 36)
-    static bool sizeFocus(void* self,const bmw::Parcel& p) {
+    // "Listen to audio": nbt_knob switches the source and starts the music
+    static bool listenAction(void* self,const bmw::Parcel&) {
         Entry* e=static_cast<Entry*>(self);
-        bool focused=false;p.readBool(focused);
-        plog("widget size page focus",focused);
-        if(!focused||e->stopping)return true;
-        const long long tm=now_ms();
-        if(!g_entrySeen)plog("widget size ignored: page 10 not opened in this boot (restored state)",0);
-        else if(tm-e->lastSizeToggleMs<2000)plog("widget size ignored: switched just before",0);
-        else{
-            e->lastSizeToggleMs=tm;
-            setPanelSize((panelSize()+1)%4);
-            plog("widget size now",panelSize());
-        }
-        e->shownSize=0;e->app->post(&e->back,400);
+        readStatus(&e->running);
+        plog("listen to audio, session running",e->running?1:0);
+        if(e->running)touch("/fs/ram3/nbt-aa-listen");
+        e->showModels(true);
+        if(e->running&&!e->shownListen)e->app->updateModel(kListenModel,true);   // ticked at once, nbt_knob follows
         return true;
     }
-    // page 35: switch "Start at boot", back to page 10 (not for a page the HMI restores at boot, not twice within 2 s)
-    static bool bootFocus(void* self,const bmw::Parcel& p) {
+    // "Reset values": Yes = every setting to its default; both back to page 40
+    static bool resetYes(void* self,const bmw::Parcel&) {
         Entry* e=static_cast<Entry*>(self);
-        bool focused=false;p.readBool(focused);
-        plog("start at boot page focus",focused);
-        if(!focused||e->stopping)return true;
-        const long long tm=now_ms();
-        if(!g_entrySeen)plog("start at boot ignored: page 10 not opened in this boot (restored state)",0);
-        else if(tm-e->lastBootToggleMs<2000)plog("start at boot ignored: switched just before",0);
-        else{
-            e->lastBootToggleMs=tm;
-            if(bootOn())touch(kBootOff); else unlink(kBootOff);
-            plog("start at boot now",bootOn()?1:0);
-        }
-        e->shownBoot=0;e->app->post(&e->back,400);
+        char path[128];
+        for(int i=0;i<kFlags;++i){pkgPath(kFlagFile[i],path,sizeof(path));unlink(path);}
+        for(size_t i=0;i<sizeof(kOldFlags)/sizeof(kOldFlags[0]);++i){pkgPath(kOldFlags[i],path,sizeof(path));unlink(path);}
+        plog("settings reset to their defaults",0);
+        e->showModels(true);
+        e->app->post(&e->back,300);
         return true;
     }
-    static bool restartFocus(void* self,const bmw::Parcel& p) {
+    static bool resetNo(void* self,const bmw::Parcel&) {
         Entry* e=static_cast<Entry*>(self);
-        bool focused=false;p.readBool(focused);
-        plog("restart page focus",focused);
-        if(focused&&!e->stopping){
-            restartService(0);
-            e->holds=0;e->window=now_s();e->lastSideHoldMs=-100000;   // fresh loop guard for the new session
-            e->app->post(&e->back,400);
-        }
+        plog("settings reset: no",0);
+        e->app->post(&e->back,100);
         return true;
     }
     long long showUntilMs;   // a show request was handled: until then, a lost focus is taken back once (Checker)
@@ -683,7 +641,7 @@ void TargetPoll::run() {
     if(!app||!e||e->stopping){active=false;return;}
     bool running=false;
     readStatus(&running);
-    const int want=running?(int)(kHoldState+kHoldCount-1):(int)kEntryState;
+    const int want=running?(int)(kHoldState+kHoldCount-1):(int)kStatusState;
     if(want!=target){app->updateModel(kTargetModel,want);target=want;plog("entry target ->",want);}
     {   // iDrive's call screens (see kCall)
         const long long now=now_ms();
@@ -776,7 +734,7 @@ void Checker::run() {
         else plog("check: side panel/popup, waiting");
         return;
     }
-    if(e->running&&e->entryFocused){e->hold("check: entry page reached -> hold");return;}
+    if(e->running&&e->statusFocused){e->hold("check: status page reached -> hold");return;}
     plog("check: page left");
     touch(kHidden);                                        // the page was left: hide the picture
 }
@@ -904,26 +862,26 @@ bmw::IPluginApp* create(bmw::IDispatcher& d,const char* name,const bmw::Bundle& 
     entry.focusMask=entry.visibleMask=0;
     bmw::ActionDelegate onEntry={&entry,&Entry::entryFocus};
     app->addHandler(kEntryState,kFocus,onEntry);
-    entry.back.app=app;entry.shownMode=0;
-    entry.target.app=app;entry.target.e=&entry;entry.target.active=false;entry.target.target=kEntryState;
-    bmw::ActionDelegate onDecoder={&entry,&Entry::decoderFocus};
-    app->addHandler(kDecoderState,kFocus,onDecoder);
-    entry.shownDecoder=0;
-    bmw::ActionDelegate onPanel={&entry,&Entry::panelFocus};
-    app->addHandler(kPanelState,kFocus,onPanel);
-    entry.shownPanel=0;entry.shownPanelVis=-1;
-    bmw::ActionDelegate onSize={&entry,&Entry::sizeFocus};
-    app->addHandler(kSizeState,kFocus,onSize);
-    entry.shownSize=0;
-    bmw::ActionDelegate on169={&entry,&Entry::mode169Focus};
-    bmw::ActionDelegate onWide={&entry,&Entry::modeWideFocus};
-    app->addHandler(kMode169State,kFocus,on169);
-    app->addHandler(kModeWideState,kFocus,onWide);
-    bmw::ActionDelegate onRestart={&entry,&Entry::restartFocus};
-    app->addHandler(kRestartState,kFocus,onRestart);
-    bmw::ActionDelegate onBoot={&entry,&Entry::bootFocus};
-    app->addHandler(kBootState,kFocus,onBoot);
-    entry.shownBoot=0;
+    entry.back.app=app;
+    entry.target.app=app;entry.target.e=&entry;entry.target.active=false;entry.target.target=kStatusState;
+    bmw::ActionDelegate onStatus={&entry,&Entry::statusFocus};
+    bmw::ActionDelegate onSettings={&entry,&Entry::settingsFocus};
+    bmw::ActionDelegate onAdvanced={&entry,&Entry::advancedFocus};
+    bmw::ActionDelegate onReset={&entry,&Entry::resetFocus};
+    app->addHandler(kStatusState,kFocus,onStatus);
+    app->addHandler(kSettingsState,kFocus,onSettings);
+    app->addHandler(kAdvancedState,kFocus,onAdvanced);
+    app->addHandler(kResetState,kFocus,onReset);
+    for(int i=0;i<kBoxCount;++i){
+        bmw::ActionDelegate onBox={&entry.boxSlots[i],&Entry::boxAction};
+        app->addHandler(kBoxes[i].action,onBox);
+    }
+    bmw::ActionDelegate onListen={&entry,&Entry::listenAction};
+    bmw::ActionDelegate onYes={&entry,&Entry::resetYes};
+    bmw::ActionDelegate onNo={&entry,&Entry::resetNo};
+    app->addHandler(kListenAction,onListen);
+    app->addHandler(kResetYes,onYes);
+    app->addHandler(kResetNo,onNo);
     for(unsigned i=0;i<kHoldCount;++i){
         bmw::ActionDelegate onHold={&entry.slots[i],&Entry::holdFocus};
         bmw::ActionDelegate onHoldVisible={&entry.slots[i],&Entry::holdVisibility};

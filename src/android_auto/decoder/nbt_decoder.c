@@ -1087,6 +1087,26 @@ static void sub_mixer(int w, int h, int out_h)
     say("panel: the stream's mixer %p replaced by %p (1 layer, %dx%d)", old, mixer, w, h);
 }
 
+/* the box's size and place from decoder.panelsize (read again every second by panel_policy, so "Use large widget" in
+ * iDrive's menu applies at once): "full" = the full box, anything else = small (two pages); the old "trip" / "car"
+ * (one page each) are still understood */
+static char g_panel_size[16];
+static void panel_geometry(void)
+{
+    panel_read(RT_DIR "/decoder.panelsize", g_panel_size, sizeof(g_panel_size));
+    const char* const size = g_panel_size;
+    const int trip = !strncmp(size, "trip", 4), car = !strncmp(size, "car", 3);
+    const int small = !trip && !car && strncmp(size, "full", 4) != 0;   /* the default */
+    g_panel.paged = small || trip || car;
+    g_panel.pages = small ? 2 : 1;
+    g_panel.page = car ? 2 : small && access(PANEL_PAGE2_FILE, F_OK) == 0 ? 2 : 1;
+    g_panel.w = g_panel.paged ? PANEL_PAGED_W : PANEL_W;
+    g_panel.h = g_panel.paged ? PANEL_PAGED_H : PANEL_H;
+    g_sub.x = (int)read_number(RT_DIR "/decoder.panelx", PANEL_X + PANEL_W - g_panel.w);
+    g_sub.y = (int)read_number(RT_DIR "/decoder.panely", PANEL_Y);
+    corner_mask();
+}
+
 /* after a stream is set up: the subpicture as large as its buffers, the palette, the box's settings */
 static void panel_open(void)
 {
@@ -1108,19 +1128,7 @@ static void panel_open(void)
     }
     if (!g_sub_mixer)
         return;
-    {
-        char size[16] = "";
-        panel_read(RT_DIR "/decoder.panelsize", size, sizeof(size));
-        const int trip = !strncmp(size, "trip", 4), car = !strncmp(size, "car", 3);
-        const int small = !trip && !car && strncmp(size, "full", 4) != 0;   /* the default */
-        g_panel.paged = small || trip || car;
-        g_panel.pages = small ? 2 : 1;
-        g_panel.page = car ? 2 : small && access(PANEL_PAGE2_FILE, F_OK) == 0 ? 2 : 1;
-    }
-    g_panel.w = g_panel.paged ? PANEL_PAGED_W : PANEL_W;
-    g_panel.h = g_panel.paged ? PANEL_PAGED_H : PANEL_H;
-    g_sub.x = (int)read_number(RT_DIR "/decoder.panelx", PANEL_X + PANEL_W - g_panel.w);
-    g_sub.y = (int)read_number(RT_DIR "/decoder.panely", PANEL_Y);
+    panel_geometry();
     g_sub.flip = (int)read_number(RT_DIR "/decoder.panelflip", 0);
     {
         FILE* f = fopen(RT_DIR "/decoder.panelbg", "r");
@@ -1135,7 +1143,6 @@ static void panel_open(void)
             fclose(f);
         }
     }
-    corner_mask();
     free(g_sub.frame);
     g_sub.fw = g_car.w;
     g_sub.fh = g_car.out_h;
@@ -1471,6 +1478,35 @@ static void vol_policy(long long now)
     }
 }
 
+/* once a second: the settings iDrive's menu changes while we run (aa_entry_plugin): the box's size, the volume popup;
+ * a few access() / one small read, nothing else */
+static void settings_poll(long long now)
+{
+    (void)now;
+    char size[16] = "";
+    panel_read(RT_DIR "/decoder.panelsize", size, sizeof(size));
+    if (strcmp(size, g_panel_size) != 0) {
+        box_take();
+        panel_geometry();
+        g_panel.text_at = 0;
+        say("panel: size now %s", g_panel.paged ? "small" : "full");
+    }
+    const int vol_off = access(RT_DIR "/decoder.novolume", F_OK) == 0;
+    if (vol_off != g_vol.off) {
+        g_vol.off = vol_off;
+        say("volume popup %s", vol_off ? "off" : "on");
+        if (vol_off && g_sub.vol_in) {
+            sub_put(vol_x(), vol_y(), VOL_W, VOL_H, 0);
+            g_sub.vol_in = 0;
+            g_vol.fade = 0;
+        }
+        if (!vol_off) {
+            g_vol.seq = -1;   /* the next line is only the starting point again */
+            vol_base(0, 1);
+        }
+    }
+}
+
 /* every window policy round (main thread). The box: drawn every second (the short-term average speed integrates
  * there); put into the picture only while Android Auto's window is shown, it hides and shows with that window by
  * itself (it is part of the window's picture); long NAV (/fs/ram3/nbt-aa-panel-off) hides it. The volume popup:
@@ -1499,6 +1535,7 @@ static void panel_policy(void)
     }
     if (now >= g_panel.text_at) {
         g_panel.text_at = now + 1000;
+        settings_poll(now);
         panel_compose();
         g_sub.dirty = 1;
     }

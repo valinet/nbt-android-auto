@@ -22,7 +22,7 @@ The plugin starts with iDrive, can bring Android Auto to the front from anywhere
 | --- | --- |
 | Menu | Picture mode buttons renamed "Split screen" / "Full width", hint lines removed; mode change works right after boot |
 | Restart system | On the Android Auto page: reboots the head unit with `nbt_reset` (UDS 11 01 through the gateway); the separate NbtReboot plugin is gone. From a laptop: `scripts/nbt_reset.py` |
-| Start at boot | On/off button (file `start-at-boot.off`); once per boot, brings Android Auto to the front when the first session runs |
+| Start at boot | Replaced by "Connect automatically" (2026-11-27, file `gate-on` when unticked): ticked, the phone is taken when plugged in and the first session of a boot comes to the front |
 | Service start | The Android Auto service starts at once, no 15 s delay; no HMI gate (opt-in file `gate-on`) |
 | Menu entry | Leads straight to the picture while a session runs |
 | Early start | The plugin calls `PluginApp::start()` itself when iDrive loads it, so its timers run before the page is first opened |
@@ -161,3 +161,27 @@ The phone's playing / paused state comes from the session: a small NBT-AAD core 
 - Occasional drops mid-session: the phone goes silent for 5 s and the session reconnects. Seen while running on
   battery; cause not yet found.
 - A OnePlus 7 Pro on Android 11 never answers the first protocol message; needs the phone's own log.
+
+## iDrive menu (2026-11-27)
+
+Multimedia -> **CarPlay & Android Auto** always opens the menu. Settings are flag files in the package
+(`/var/opt/hmi/data/rw/NbtAndroidAutoRT`); `*` = applies after a reboot, everything else at once.
+
+| Item | Flag | Default | Read by |
+|---|---|---|---|
+| Use CarPlay / Use Android Auto | - | - | the picture if a session runs, else the status page, which asks for the phone |
+| Connect automatically | `gate-on` when unticked | ticked | native_service before every connection; nbt_knob (bring the first session of a boot to the front) |
+| Listen to audio | - (`/fs/ram3/nbt-aa-listen`) | - | nbt_knob: the source to Android Auto's / CarPlay's and play; ticked while that is the source, greyed out without a session |
+| Settings > Display as full screen * | `split800` when unticked | ticked | boot.sh |
+| Settings > Show using NAV button | `nav-off` when unticked | ticked | nbt_knob, every NAV press |
+| Settings > Open widget automatically | `panel-at-start` | unticked | nbt_decoder, every session start |
+| Settings > Use large widget | `decoder.panelsize` = `full` | unticked | nbt_decoder, every second |
+| Advanced > Use software decoder * | `decoder.sw` | unticked | boot.sh |
+| Advanced > Limit frame rate * | `decoder.30fps` (the phone is asked for 30 fps) | unticked | boot.sh |
+| Advanced > Show frame rate | `decoder.showfps` | unticked | nbt_decoder, every second |
+| Advanced > Display volume changes | `decoder.novolume` when unticked | ticked | nbt_decoder, every second |
+| Advanced > Reboot | - | - | nbt_reset |
+| Settings > Reset values | removes all of the above (and the older `anamorph`, `center800`, `classic`, `decoder.hw`, `start-at-boot.off`) | - | - |
+
+Checkboxes are raActions with raBoolModels (`PluginApp::addHandler(action, delegate)`, libAppFramework); not yet tried
+in the car as of this commit.

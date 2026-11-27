@@ -897,7 +897,9 @@ unsigned g_auxButton = 7, g_aaButton = 8;
 bool g_favDone = false;          // once per service life
 long long g_favNextCheck = 0;
 const char* const kFavDone = "/fs/ram3/nbt-aa-fav-done";                          // once per boot
-const char* const kFavOff = "/var/opt/hmi/data/rw/NbtAndroidAutoRT/start-at-boot.off";   // menu: "Start at boot" off
+// "Connect automatically" unticked in the menu (2026-11-27, replaces "Start at boot" / start-at-boot.off): the session
+// only starts after "Use ..." was pressed, where the HMI plugin brings the picture up itself
+const char* const kFavOff = "/var/opt/hmi/data/rw/NbtAndroidAutoRT/gate-on";
 
 void pressFavourite(nbt::most::Client& most, uint16_t src, uint16_t dst, unsigned button) {
     most.send(favMsg(src, dst, button, 2));
@@ -1070,6 +1072,28 @@ void navLongIfNeeded() {
     }
 }
 
+// "Listen to audio" in the menu (HMI plugin, 2026-11-27): /fs/ram3/nbt-aa-listen -> the source to Android Auto's /
+// CarPlay's and the phone's music playing (no pause: unlike NAV, the item only ever starts it). The plugin ticks the
+// item from kSourceFile and kAuxSourceFile.
+const char* const kListen = "/fs/ram3/nbt-aa-listen";
+const char* const kAuxSourceFile = "/fs/ram3/nbt-aa-auxsource";
+void listenIfNeeded(nbt::most::Client& most) {
+    if (unlink(kListen) != 0) return;
+    if (!sessionRunning()) { printf("[Knob] listen: no session\n"); return; }
+    const int st = mediaState();
+    const bool onAux = g_lastSource == (int)g_auxSource;
+    printf("[Knob] listen: source %02X, phone media state %d\n", g_lastSource < 0 ? 0xFF : g_lastSource, st);
+    if (!onAux) {
+        requestSource(most, g_auxSource);
+        if (st == 2) return;                                       // already playing
+        if (g_wePaused && g_auxResume) return;                     // the back-to-AUX resume (onSource) starts it
+        g_prevMedia = 2;                                           // our own play: no second switch request
+        g_mediaNextCheck = nowMs() + 3000;
+    } else if (st == 2) return;                                    // on it and playing: nothing to do
+    wheelKeyLine(85, 1, "LISTEN_PLAY");
+    wheelKeyLine(85, 0, "LISTEN_PLAY");
+}
+
 // main thread: NAV pressed while Android Auto was on screen -> Android Auto audio / play-pause (see the header)
 void navAudioIfNeeded(nbt::most::Client& most) {
     pthread_mutex_lock(&g_backMx);
@@ -1136,7 +1160,7 @@ void favouritesIfNeeded(nbt::most::Client& most) {
     g_favDone = true;
     if (access(kFavDone, F_OK) == 0) { printf("[Knob] start at boot: already done in this boot\n"); return; }
     if (FILE* m = fopen(kFavDone, "w")) fclose(m);
-    if (access(kFavOff, F_OK) == 0) { printf("[Knob] start at boot: switched off in the menu\n"); return; }
+    if (access(kFavOff, F_OK) == 0) { printf("[Knob] start at boot: manual connection (menu), nothing to do\n"); return; }
     if (g_auxButton) {
         printf("[Knob] session running: favourite %u (AUX) %04X->%04X\n", g_auxButton, src, dst);
         pressFavourite(most, src, dst, g_auxButton);
@@ -1246,7 +1270,9 @@ void onKnob(const nbt::car::CcsEvent& ev, void*) {
     }
     // NAV opens Android Auto (user 2026-11-17): iDrive still gets the key and opens its navigation, the show request
     // (HMI plugin, checked every 250 ms) brings Android Auto back over it. NBT_NAV_OPENS_AA=0: NAV stays with iDrive.
-    if (!ev.keycode && ev.kind == 1 && ev.down && !ev.cancel && g_navOpensAa && !strcmp(ev.what, "NAV") && sessionRunning()) {
+    // "Show using NAV button" unticked in the menu (2026-11-27): nav-off in the package, looked at on every press
+    if (!ev.keycode && ev.kind == 1 && ev.down && !ev.cancel && g_navOpensAa && !strcmp(ev.what, "NAV") && sessionRunning() &&
+        access("/var/opt/hmi/data/rw/NbtAndroidAutoRT/nav-off", F_OK) != 0) {
         const bool own = nowMs() < g_ownNavUntil;
         if (own) printf("[Knob] NAV: our own (HMI plugin), no audio action\n");
         else if (aaActive()) {               // already in Android Auto: short = its audio (on release), long = the box
@@ -1445,6 +1471,7 @@ int main(int argc, char** argv) {
     }
     unlink(kPromptReady);
     unlink(kSourceFile);
+    if (!trace) if (FILE* f = fopen(kAuxSourceFile, "w")) { fprintf(f, "%04x\n", g_auxSource); fclose(f); }
     if (!trace) unlink("/fs/ram3/nbt-aa-call");
     if (trace && !most.setTap(&onTap, NULL)) return 3;
     if (!most.start("NBTPROJ_KNOB")) return 3;
@@ -1496,6 +1523,7 @@ int main(int argc, char** argv) {
         favouritesIfNeeded(most);
         playSwitchIfNeeded(most);
         navAudioIfNeeded(most);
+        if (!trace) listenIfNeeded(most);
         if (!trace) { navLongIfNeeded(); wheelLongIfNeeded(); tripIfNeeded(most); }
         if (!trace) promptRouteIfNeeded(most);
         if (!trace) btAudioIfNeeded(most);

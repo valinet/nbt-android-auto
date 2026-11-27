@@ -1,6 +1,6 @@
 """Build the local NbtAndroidAuto plugin package (XML, manifest, text/image zips). Never installs anything.
 Usage: python make_aa_entry_resources.py <output-dir>   (libNbtAndroidAuto.so is built separately in the QNX VM)
-Text ids 2..9 are the status lines the plugin switches between (aa_entry_plugin.cpp kTxt*)."""
+Text ids 2..9 are the status lines (47..56: the menu of 2026-11-27; checkbox texts are in the XML) the plugin switches between (aa_entry_plugin.cpp kTxt*)."""
 from pathlib import Path
 import shutil
 import sys
@@ -15,7 +15,7 @@ for name in ('NbtAndroidAuto.xml', 'NbtAndroidAuto.manifest'):
     shutil.copyfile(source / name, output / name)
 # keep every line short: the page shows about 25 characters per line (car 2026-11-08)
 GERMAN = {
-    1: 'CarPlay / Android Auto',
+    1: 'CarPlay & Android Auto',
     2: 'Telefon per USB verbinden',
     3: 'Kein Telefon verbunden',
     4: 'Wird gestartet ...',
@@ -61,9 +61,19 @@ GERMAN = {
     44: 'Widget size: Car only',
     45: 'Widget size',
     46: 'Bitte System neu starten',
+    47: 'CarPlay / Android Auto nutzen',
+    48: 'CarPlay nutzen',
+    49: 'Android Auto nutzen',
+    50: 'Einstellungen',
+    51: 'Erweitert',
+    52: 'Werte zuruecksetzen',
+    53: 'Einstellungen zuruecksetzen?',
+    54: 'Ja',
+    55: 'Nein',
+    56: 'Neustart',
 }
 ENGLISH = {
-    1: 'CarPlay / Android Auto',
+    1: 'CarPlay & Android Auto',
     2: 'Connect phone via USB',
     3: 'No phone connected',
     4: 'Starting ...',
@@ -109,6 +119,16 @@ ENGLISH = {
     44: 'Widget size: Car only',
     45: 'Widget size',
     46: 'Please restart the system',
+    47: 'Use CarPlay or Android Auto',
+    48: 'Use CarPlay',
+    49: 'Use Android Auto',
+    50: 'Settings',
+    51: 'Advanced',
+    52: 'Reset values',
+    53: 'Reset settings to default?',
+    54: 'Yes',
+    55: 'No',
+    56: 'Reboot',
 }
 languages = ['de', 'en-UK', 'en-US', 'es-US', 'es-ES', 'fr-FR', 'fr-CA', 'it', 'pt', 'ru']
 with zipfile.ZipFile(output / 'NbtAndroidAuto_ALL_Texts.zip', 'w', zipfile.ZIP_DEFLATED) as archive:

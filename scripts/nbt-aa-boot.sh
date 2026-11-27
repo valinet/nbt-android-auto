@@ -29,7 +29,8 @@ if test -e $P/res720; then touch $R/res720; echo 'res720 on'; fi
 rm -f $R/wal.args $R/shadow.path
 # No gate (user 2026-11-12): the phone is taken at once, the session runs in the background and the picture stays hidden
 # (/fs/ram3/nbt-aa-hidden) until the Android Auto page is opened. The old behaviour (phone only after the page was opened
-# once): touch $P/gate-on
+# once): touch $P/gate-on ("Connect automatically" unticked in iDrive's menu; native_service looks at it before every
+# connection, so this copy only matters for older native_service builds)
 rm -f $R/gate.mode
 if test -e $P/gate-on; then touch $R/gate.mode; echo 'gate on'; fi
 # Decoder mode (2026-11-18): nbt_decoder (FFmpeg decoder, the car's video path, src/android_auto/decoder), used whenever
@@ -49,7 +50,7 @@ if test -f $P/nbt_decoder -a ! -e $P/decoder.off; then
   test -f $P/decoder.args && cp $P/decoder.args $R/decoder.args
   test -f $P/decoder.stale && cp $P/decoder.stale $R/decoder.stale
   test -e $P/decoder.800 || touch $R/decoder.720       # full screen 1280x720, top 480 rows 1:1 (default; touch $P/decoder.800 = 800x480 stretched)
-  test -e $P/decoder.hw && touch $R/decoder.hw         # the car's hardware H.264 decoder (test)
+  test -e $P/decoder.sw || touch $R/decoder.hw         # the car's hardware H.264 decoder (default since 2026-11-27; $P/decoder.sw = FFmpeg on the CPU, "Use software decoder" in iDrive's menu)
   test -f $P/decoder.delay && cp $P/decoder.delay $R/decoder.delay   # seconds after "MARKER HMIReady" at boot (default 2)
   echo "video: nbt_decoder (`test -e $R/decoder.60fps && echo 60 || echo 30` fps)"
 fi

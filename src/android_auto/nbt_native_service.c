@@ -44,6 +44,9 @@
 #define RUNTIME_DIR "/fs/ram3/nbt-aa-native"
 #define HMI_STATE_FILE "/fs/ram3/nbt-aa-state"
 #define HMI_REQUEST_FILE "/fs/ram3/nbt-aa-request"
+/* "Connect automatically" unticked in iDrive's menu (aa_entry_plugin, 2026-11-27): the package's gate-on, looked at
+ * before every connection, so the setting applies without a restart */
+#define GATE_FILE "/var/opt/hmi/data/rw/NbtAndroidAutoRT/gate-on"
 #define CINEMO_LIBRARY_PATH "/opt/mm/lib/cinemo:/opt/mm/lib:/lib:/usr/lib"
 #define SYSTEM_LIBRARY_PATH "/opt/sys/lib:/lib:/usr/lib"
 #define DECODER_LIBRARY_PATH "/proc/boot:/lib:/usr/lib:/opt/sys/lib"
@@ -154,6 +157,7 @@ static Child spawn(char* const args[], const char* input, const char* log)
  * States: waiting_for_phone, several_devices, waiting_for_hmi, connecting, unsupported_device, replug_required,
  *         starting_decoder, running, draining, stopped. */
 static int g_phone_present;
+static int g_phone_kind; /* the found phone: 0 none / several, 1 Android, 2 iPhone (or the CarPlay bridge board) */
 static int g_reboot; /* reboot.required: the picture comes back only after a reboot (decoder_ready) */
 static long long g_last_report;
 static char g_last_state[32];
@@ -169,7 +173,8 @@ static void report(const char* state, unsigned session)
     }
     f = fopen(HMI_STATE_FILE ".tmp", "w");
     if (f) {
-        fprintf(f, "state=%s\nphone=%d\nsession=%u\nreboot=%d\n", state, g_phone_present, session, g_reboot);
+        fprintf(f, "state=%s\nphone=%d\nsession=%u\nreboot=%d\nkind=%s\n", state, g_phone_present, session, g_reboot,
+                g_phone_kind == 2 ? "carplay" : g_phone_kind == 1 ? "android" : "none");
         fclose(f);
         chmod(HMI_STATE_FILE ".tmp", 0644);
         rename(HMI_STATE_FILE ".tmp", HMI_STATE_FILE);
@@ -326,6 +331,9 @@ static int find_phone(int* bus, int* device)
         } else
             found_aoa = u->p;
     }
+    g_phone_kind = matches != 1                                            ? 0
+                   : result == PHONE_CARPLAY || result == PHONE_BRIDGE ? 2
+                                                                       : 1;
     return matches == 1 ? result : 0;
 }
 
@@ -870,7 +878,7 @@ int main(int argc, char** argv)
     while (!stopping && alive(&lease)) {
         /* Optional HMI gate (file gate.mode in the runtime directory): the phone is only touched after the Android Auto
          * page in the HMI was opened, which creates /fs/ram3/nbt-aa-request (see src/idrive/aa_entry_plugin.cpp). */
-        if (gate && access(HMI_REQUEST_FILE, F_OK)) {
+        if ((gate || access(GATE_FILE, F_OK) == 0) && access(HMI_REQUEST_FILE, F_OK)) {
             find_phone(&bus, &device);
             report("waiting_for_hmi", session);
             sleep(1);
@@ -882,8 +890,12 @@ int main(int argc, char** argv)
             /* gone for more than 10 s: really unplugged (a USB reset of ours only makes it vanish for a moment) */
             if (!absent_since)
                 absent_since = ms();
-            if (ms() - absent_since > 10000)
+            if (ms() - absent_since > 10000) {
                 resets = 0;
+                /* manual connection: the press on "Use ..." was for that phone; the next one waits for another */
+                if (access(GATE_FILE, F_OK) == 0 && unlink(HMI_REQUEST_FILE) == 0)
+                    printf("[native] phone gone: the HMI request is used up\n");
+            }
             report(g_phone_present ? "several_devices" : "waiting_for_phone", session);
             sleep(1);
             continue;

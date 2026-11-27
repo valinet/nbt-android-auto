@@ -21,13 +21,14 @@ Used whenever `nbt_decoder` is installed, at 60 fps; no file is needed. Optional
 | `split800` | The 800x480 picture 1:1 at the left edge (`--size 800x480`), iDrive's split screen stays visible; otherwise stretched to 1280x480 |
 | `decoder.stale` | Milliseconds without a new picture before the window is hidden (default 5000, `0` = never) |
 | `decoder.800` | Full screen: the old 800x480 picture stretched to 1280x480. Default (without it): sharp, the phone draws 1280x720 with its interface in the top 480 rows, shown 1:1 (`--rows 480`); 2.4x the pixels to decode on the CPU |
-| `decoder.hw` | Hardware decoding: the car's own H.264 decoder instead of FFmpeg's (`--hw`, see below); the sharp full-screen picture without the CPU cost. Also "Decoder: Software / Hardware" on iDrive's Android Auto page (default Software), which restarts the Android Auto service |
+| `decoder.sw` | Software decoding (FFmpeg on the CPU) instead of the car's own H.264 decoder (`--hw`, see below; the default since 2026-11-27). "Use software decoder *" in iDrive's Advanced settings; applies after a reboot. (`decoder.hw` is no longer read) |
 | `decoder.panelx`, `decoder.panely` | The box's position in Android Auto's window (default: right edge at 1259, y 96) |
 | `decoder.fuelscale` | Microlitres of fuel per count of CDS `engine.consumption`, x1000 (default 1000), for the box's instantaneous consumption |
 | `decoder.panelbg` | The box's background as hex RRGGBBAA (default 000000B4, translucent black; FF = opaque). Text and icons are white on a dark background and black on a light one; the 1 px outline is derived from it (lighter on dark, darker on light). Grey is exact; with a coloured one red and blue may come out swapped (not traced) |
 | `decoder.panelflip` | The box's bitmap: 1 rows reversed, 2 columns reversed, 3 both (default 0) |
-| `decoder.novolume` | No volume popup over the picture |
-| `decoder.panelsize` | The box's size, set by "Widget size" in iDrive's Android Auto page: `full` = full width (384 px); none (the default) or `small` = 256 px (same right edge, x 1003) with two pages, long NAV cycles page 1, page 2, off; `trip` / `car` = 256 px with only that page, long NAV on / off. Read when the session starts |
+| `decoder.novolume` | No volume popup over the picture ("Display volume changes" unticked in Advanced; read every second) |
+| `decoder.showfps` | Frame rate overlay in the top left corner: pictures shown in the last second, updated every second ("Show frame rate" in Advanced; read every second; nothing drawn or uploaded while off; full width only, like the box) |
+| `decoder.panelsize` | The box's size, set by "Widget size" in iDrive's Android Auto page: `full` = full width (384 px); none (the default) or `small` = 256 px (same right edge, x 1003) with two pages, long NAV cycles page 1, page 2, off; `trip` / `car` = 256 px with only that page, long NAV on / off. "Use large widget" in iDrive's Settings writes `full` or removes it; read every second, the box changes size at once |
 | `decoder.args` | One line of extra arguments for `nbt_decoder` |
 | `decoder.bgvideo` | Keep decoding while the Android Auto / CarPlay page is not on screen. Default (since 2026-11-25): nothing is decoded then; Android Auto gets video focus NATIVE and pauses its video, `nbt_carplay` drops the iPhone's frames; back on the page both send a fresh key frame |
 | `decoder.delay` | Seconds after iDrive's `MARKER HMIReady` before the first session at boot (default 2) |
@@ -258,8 +259,8 @@ A box at x 875, y 96, 384x167 with a "Trip computer" title line (20 px from the 
 - Long roller push (700 ms, `NBT_PUSH_LONG_MS`, `nbt_knob`): short-term average speed on / off. On, it averages the
   current speed (CDS `driving.speedActual`) from that moment and shows it at the end of the title line; a short push
   is still play / pause (now on the release).
-- At the start of each session the box is hidden unless "Show widget at startup: on" is set in iDrive's Android Auto page
-  (flag file `panel-at-start` in the package; default off; the button only shows in full width). Long NAV still
+- At the start of each session the box is hidden unless "Open widget automatically" is ticked in iDrive's Settings
+  (flag file `panel-at-start` in the package; default off). Long NAV still
   shows / hides it during the session. There is no other switch: in full width the box's process always runs; while
   the box is hidden it only draws (the short-term average speed keeps counting) and sends nothing to the window
   server.

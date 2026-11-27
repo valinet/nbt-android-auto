@@ -1,75 +1,66 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- "Android Auto" entry under Multimedia. Base structure as the vehicle-confirmed NbtLiveImage page; hold state 13 and
-     focusEvent 52 as in the NBT-AAD reference rhmiapp (screen exclusivity). The picture is drawn by nbt_wal_present in
-     front of the HMI; libNbtAndroidAuto.so moves iDrive from state 10 to the inert state 13 and toggles
-     /fs/ram3/nbt-aa-hidden / nbt-aa-request (see aa_entry_plugin.cpp). -->
+<!-- "CarPlay & Android Auto" under Multimedia (menu: user 2026-11-27, see aa_entry_plugin.cpp). Every id in this file
+     is unique across actions, models, components, states and events (car 2026-11-12: a model with an action's id broke
+     that action). Checkboxes are raActions with an raBoolModel, as in the NBT-AAD reference's NbtAad.xml; the plugin
+     handles the action and sets the model. The picture: hold state 13 (nothing selectable), reached with the "Use ..."
+     button (target model 5: 13 while a session runs, else the status page 14) or the plugin's focus events. -->
 <pluginApps>
-  <pluginApp applicationType="Multimedia" applicationWeight="200" text="CarPlay / Android Auto">
+  <pluginApp applicationType="Multimedia" applicationWeight="200" text="CarPlay &amp; Android Auto">
     <entryButton id="1" action="2" model="3"/>
     <actions>
-      <hmiAction id="2" target="10" targetModel="5"/>
-      <!-- picture mode buttons -> inert pages 30 / 31; the plugin stores the mode and sends focus event 53 back to 10 -->
-      <hmiAction id="26" target="30"/>
-      <hmiAction id="27" target="31"/>
-      <!-- restart of the Android Auto service only (not the head unit) -> inert page 32, then back to 10 -->
-      <hmiAction id="28" target="32"/>
-      <!-- "Restart system": page 33 asks, its button leads to the inert page 34, whose focus runs nbt_reset (ids 80-89:
-           every id in this file must be unique, see model 70) -->
+      <hmiAction id="2" target="10"/>
+      <!-- "Use CarPlay / Android Auto": 13 while a session runs, else 14 (raIntModel 5, set by the plugin) -->
+      <hmiAction id="701" target="14" targetModel="5"/>
+      <raAction id="702"/>
+      <raAction id="703"/>
+      <hmiAction id="704" target="40"/>
+      <raAction id="711"/>
+      <raAction id="712"/>
+      <raAction id="713"/>
+      <raAction id="714"/>
+      <hmiAction id="715" target="42"/>
+      <hmiAction id="716" target="44"/>
+      <raAction id="721"/>
+      <raAction id="722"/>
+      <raAction id="723"/>
+      <raAction id="724"/>
+      <raAction id="731"/>
+      <raAction id="732"/>
+      <!-- "Reboot": page 33 asks, its button leads to the inert page 34, whose focus runs nbt_reset -->
       <hmiAction id="80" target="33"/>
       <hmiAction id="81" target="34"/>
-      <!-- "Start at boot" on/off (Android Auto to the front at the first session, see nbt_knob.cpp) -> inert page 35, whose
-           focus switches the flag file start-at-boot.off and sends focus event 53 back to 10 -->
-      <hmiAction id="90" target="35"/>
-      <!-- "Show widget at startup: on/off" (box shown at the start of a session, full width only) -> inert page 36, whose focus
-           switches the flag file panel-at-start and sends focus event 53 back to 10 -->
-      <hmiAction id="100" target="36"/>
-      <!-- "Decoder: Software / Hardware" -> inert page 37, whose focus switches decoder.hw, restarts the Android Auto
-           service and sends focus event 53 back to 10 -->
-      <hmiAction id="101" target="37"/>
-      <!-- "Widget size: Full width / Small / Trip only / Car only" (full width only) -> inert page 38, whose focus takes
-           the next size (decoder.panelsize) and sends focus event 53 back to 10 -->
-      <hmiAction id="106" target="38"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1" preinst="false"/>
       <textIdModel id="4" textId="2" preinst="false"/>
-      <!-- target of the menu entry: 10, or 20 (hold) while Android Auto runs, set by the plugin -->
-      <raIntModel id="5" value="10"/>
-      <textIdModel id="6" textId="11" preinst="false"/>
-      <textIdModel id="7" textId="12" preinst="false"/>
-      <textIdModel id="8" textId="13" preinst="false"/>
-      <textIdModel id="9" textId="14" preinst="false"/>
-      <textIdModel id="22" textId="15" preinst="false"/>
-      <textIdModel id="23" textId="18" preinst="false"/>
-      <textIdModel id="24" textId="10" preinst="false"/>
-      <textIdModel id="25" textId="19" preinst="false"/>
-      <!-- 70, not 26: id 26 is the 16:9 button's action; with a model of the same id the 16:9 button did nothing (car
-           2026-11-12: only "mode page widescreen" ever reached the plugin) -->
-      <textIdModel id="70" textId="20" preinst="false"/>
-      <textIdModel id="82" textId="21" preinst="false"/>
+      <raIntModel id="5" value="14"/>
+      <textIdModel id="750" textId="47" preinst="false"/>
+      <textIdModel id="751" textId="50" preinst="false"/>
+      <textIdModel id="752" textId="51" preinst="false"/>
+      <textIdModel id="753" textId="52" preinst="false"/>
+      <textIdModel id="754" textId="53" preinst="false"/>
+      <textIdModel id="755" textId="54" preinst="false"/>
+      <textIdModel id="756" textId="55" preinst="false"/>
+      <textIdModel id="82" textId="56" preinst="false"/>
       <textIdModel id="83" textId="22" preinst="false"/>
       <textIdModel id="84" textId="23" preinst="false"/>
       <textIdModel id="85" textId="24" preinst="false"/>
-      <textIdModel id="91" textId="31" preinst="false"/>
-      <textIdModel id="94" textId="33" preinst="false"/>
-      <textIdModel id="95" textId="34" preinst="false"/>
-      <textIdModel id="97" textId="36" preinst="false"/>
-      <textIdModel id="99" textId="37" preinst="false"/>
-      <textIdModel id="103" textId="38" preinst="false"/>
-      <textIdModel id="105" textId="40" preinst="false"/>
-      <textIdModel id="108" textId="42" preinst="false"/>
-      <textIdModel id="109" textId="45" preinst="false"/>
+      <raBoolModel id="790"/>
+      <raBoolModel id="791"/>
+      <raBoolModel id="792"/>
+      <raBoolModel id="793"/>
+      <raBoolModel id="794"/>
+      <raBoolModel id="795"/>
+      <raBoolModel id="796"/>
+      <raBoolModel id="797"/>
+      <raBoolModel id="798"/>
+      <raBoolModel id="799"/>
     </models>
     <events>
       <focusEvent id="52" target="13"/>
-      <focusEvent id="53" target="10"/>
-      <!-- second way into the hold states (car 2026-11-09: iDrive ignored 52 after the page had been left from level 18;
-           the plugin alternates 52 / 54 while one is ignored) -->
       <focusEvent id="54" target="13"/>
-      <!-- 200..699: the pool the plugin uses (car 2026-11-18, HmiMain3D CFocusEvent::perform): iDrive performs each
-           focus event at most 11 times per HMI start ("[RHMI FocusEvent] FocusEvent counter > 10", the counter lives
-           in the event and is never reset; only apps with the permission rhmi.unlimitedfocusevents are exempt). The
-           plugin uses each event 10 times, then the next one. -->
+      <!-- 200..699: the pool the plugin uses to bring the picture up (car 2026-11-18, HmiMain3D CFocusEvent::perform):
+           iDrive performs each focus event at most 11 times per HMI start; the plugin uses each 10 times -->
       <focusEvent id="200" target="13"/>
       <focusEvent id="201" target="13"/>
       <focusEvent id="202" target="13"/>
@@ -570,76 +561,88 @@
       <focusEvent id="697" target="13"/>
       <focusEvent id="698" target="13"/>
       <focusEvent id="699" target="13"/>
+      <!-- 760..779: back to the settings page after "Reset values" (Yes / No), the same way -->
+      <focusEvent id="760" target="40"/>
+      <focusEvent id="761" target="40"/>
+      <focusEvent id="762" target="40"/>
+      <focusEvent id="763" target="40"/>
+      <focusEvent id="764" target="40"/>
+      <focusEvent id="765" target="40"/>
+      <focusEvent id="766" target="40"/>
+      <focusEvent id="767" target="40"/>
+      <focusEvent id="768" target="40"/>
+      <focusEvent id="769" target="40"/>
+      <focusEvent id="770" target="40"/>
+      <focusEvent id="771" target="40"/>
+      <focusEvent id="772" target="40"/>
+      <focusEvent id="773" target="40"/>
+      <focusEvent id="774" target="40"/>
+      <focusEvent id="775" target="40"/>
+      <focusEvent id="776" target="40"/>
+      <focusEvent id="777" target="40"/>
+      <focusEvent id="778" target="40"/>
+      <focusEvent id="779" target="40"/>
     </events>
     <hmiStates>
-      <hmiState id="10" textModel="3" text="CarPlay / Android Auto">
+      <hmiState id="10" textModel="3" text="CarPlay &amp; Android Auto">
         <components>
-          <label id="11" model="4" text="Telefon per USB verbinden"><properties><property id="2" value="false"/></properties></label>
-          <button id="61" action="26" model="6" text="Split screen"/>
-          <button id="62" action="27" model="7" text="Full width"/>
-          <button id="92" action="90" model="91" text="Start at boot: on"/>
-          <button id="96" action="100" model="97" text="Show widget at startup: off"/>
-          <button id="107" action="106" model="108" text="Widget size: Small"/>
-          <button id="102" action="101" model="103" text="Decoder: Software"/>
-          <button id="68" action="28" model="25" text="Dienst neu starten"/>
-          <button id="86" action="80" model="82" text="System neu starten"/>
+          <button id="801" action="701" model="750" text="Use CarPlay or Android Auto"/>
+          <checkbox id="802" action="702" model="790" text="Connect automatically"/>
+          <checkbox id="803" action="703" model="791" text="Listen to audio"/>
+          <button id="804" action="704" model="751" text="Settings"/>
         </components>
       </hmiState>
-      <!-- picture mode pages: nothing selectable, the plugin returns to page 10 at once -->
-      <hmiState id="30" parentId="10" textModel="24" text="Bildmodus">
+      <!-- "Use ..." without a session: the status line; the plugin asks native_service for the phone and moves on to 13
+           when the session runs -->
+      <hmiState id="14" parentId="10" textModel="3" text="CarPlay &amp; Android Auto">
         <components>
-          <label id="66" model="23" text="Bildmodus gespeichert"/>
+          <label id="811" model="4" text="Connect phone via USB"><properties><property id="2" value="false"/></properties></label>
         </components>
       </hmiState>
-      <hmiState id="31" parentId="10" textModel="24" text="Bildmodus">
+      <!-- * = applies after a reboot -->
+      <hmiState id="40" parentId="10" textModel="751" text="Settings">
         <components>
-          <label id="67" model="23" text="Bildmodus gespeichert"/>
+          <checkbox id="821" action="711" model="792" text="Display as full screen *"/>
+          <checkbox id="822" action="712" model="793" text="Show using NAV button"/>
+          <checkbox id="823" action="713" model="794" text="Open widget automatically"/>
+          <checkbox id="824" action="714" model="795" text="Use large widget"/>
+          <button id="825" action="715" model="752" text="Advanced"/>
+          <button id="826" action="716" model="753" text="Reset values"/>
         </components>
       </hmiState>
-      <hmiState id="35" parentId="10" textModel="95" text="Start at boot">
+      <hmiState id="42" parentId="40" textModel="752" text="Advanced">
         <components>
-          <label id="93" model="94" text="Setting saved"/>
+          <checkbox id="831" action="721" model="796" text="Use software decoder *"/>
+          <checkbox id="832" action="722" model="797" text="Limit frame rate *"/>
+          <checkbox id="833" action="723" model="798" text="Show frame rate"/>
+          <checkbox id="834" action="724" model="799" text="Display volume changes"/>
+          <button id="86" action="80" model="82" text="Reboot"/>
         </components>
       </hmiState>
-      <hmiState id="36" parentId="10" textModel="99" text="Show widget at startup">
+      <hmiState id="44" parentId="40" textModel="753" text="Reset values">
         <components>
-          <label id="98" model="94" text="Setting saved"/>
+          <label id="841" model="754" text="Reset settings to default?"><properties><property id="2" value="false"/></properties></label>
+          <button id="842" action="731" model="755" text="Yes"/>
+          <button id="843" action="732" model="756" text="No"/>
         </components>
       </hmiState>
-      <hmiState id="38" parentId="10" textModel="109" text="Widget size">
+      <hmiState id="33" parentId="42" textModel="82" text="Reboot">
         <components>
-          <label id="110" model="94" text="Setting saved"/>
-        </components>
-      </hmiState>
-      <hmiState id="37" parentId="10" textModel="105" text="Decoder">
-        <components>
-          <label id="104" model="70" text="Dienst startet neu"/>
-        </components>
-      </hmiState>
-      <hmiState id="32" parentId="10" textModel="3" text="CarPlay / Android Auto">
-        <components>
-          <label id="69" model="70" text="Dienst startet neu"/>
-        </components>
-      </hmiState>
-      <hmiState id="33" parentId="10" textModel="82" text="System neu starten">
-        <components>
-          <label id="87" model="83" text="Head Unit jetzt neu starten?"><properties><property id="2" value="false"/></properties></label>
-          <button id="88" action="81" model="84" text="Jetzt neu starten"/>
+          <label id="87" model="83" text="Restart the head unit now?"><properties><property id="2" value="false"/></properties></label>
+          <button id="88" action="81" model="84" text="Restart now"/>
         </components>
       </hmiState>
       <!-- nothing selectable: reaching it starts the restart; model 85 shows the result -->
-      <hmiState id="34" parentId="33" textModel="82" text="System neu starten">
+      <hmiState id="34" parentId="33" textModel="82" text="Reboot">
         <components>
-          <label id="89" model="85" text="Startet neu ..."/>
+          <label id="89" model="85" text="Restarting ..."/>
         </components>
       </hmiState>
-      <!-- hold state 13: nothing selectable, so controller turns / pushes / tilts do nothing in iDrive. It was 8 nested
-           states (13..20) for BACK / tilt left; since 2026-11-17 nbt_knob's guards keep iDrive's focus there (tilt right
-           on BACK / tilt left, then BACK), so one is enough (user decision 2026-11-17, revert this commit if it breaks).
-           focusEvent 52 and 54 both lead here (car 2026-11-07: too many events made the HMI ignore them). -->
-      <hmiState id="13" parentId="10" textModel="3" text="CarPlay / Android Auto">
+      <!-- hold state 13: nothing selectable, so controller turns / pushes / tilts do nothing in iDrive (nbt_knob's guards
+           keep iDrive's focus here). focusEvent 52 / 54 and the pool lead here. -->
+      <hmiState id="13" parentId="10" textModel="3" text="CarPlay &amp; Android Auto">
         <components>
-          <label id="41" model="4" text="Telefon per USB verbinden"/>
+          <label id="41" model="4" text="Connect phone via USB"/>
         </components>
       </hmiState>
     </hmiStates>
