@@ -17,13 +17,12 @@
 // While /fs/ram3/nbt-aa-hidden exists (Android Auto page not on screen) presses are not forwarded; releases always are,
 // so the phone never keeps a key held down.
 //
-// Split-screen mode (2026-11-12, user: "pressing BACK right after fixes it"): iDrive also sees every tilt RIGHT and puts its
-// focus into the split screen (menu on the right), also in the full-width modes where the split screen is behind the
-// picture. When a tilt right is released while Android Auto is on screen (any picture mode), nbt_knob answers it with a BACK sent to the HMI as if the controller had sent it (the one place this
-// program sends anything). Car-tested with nbt_key: this controller speaks the older CCS protocol, E5/01 fkt C20 from
-// 3002 to 2025, one event per message, [2] = message counter; the BACK copies the controller's addresses and continues
-// its counter. Only for C20 controllers (C46/C47 ones: not implemented). The BACK arrives here too: it is not forwarded
-// to the phone (600 ms window).
+// The hold state is iDrive's TerminalUI page in full screen (2026-11-28, aa_entry_plugin): iDrive gives it the
+// controller, so tilts and BACK no longer move iDrive; the tricks this program used to keep iDrive on the page (BACK
+// after a tilt right, the BACK guard and the tilt left guard: C20 messages sent to the HMI) are gone. It still sends a
+// hard key to the HMI for the HMI plugin (NAV after the parking assistant). Car-tested with nbt_key: this controller
+// speaks the older CCS protocol, E5/01 fkt C20 from 3002 to 2025, one event per message, [2] = message counter; ours
+// copy the controller's addresses and continue its counter. Only for C20 controllers (C46/C47 ones: not implemented).
 //
 // Steering wheel roller (2026-11-12, user: phone audio over AUX, so the wheel's skip buttons did nothing): MOST FBlock
 // 0x15 instance 02, op Status, src 3002, one byte each (car trace 2026-11-12, every message arrives twice, once per HMI
@@ -146,16 +145,13 @@ uint16_t g_ccsSrc = 0, g_ccsDst = 0;   // addresses of the controller's last C20
 uint16_t g_selfDev = 0;
 bool g_counterKnown = false;
 uint8_t g_ccsCounter = 0;              // its last counter
-bool g_tiltRightDown = false;
-bool g_backPending = false;            // tilt right released: the main loop sends BACK
-long long g_ignoreBackUntil = 0;       // our own BACK coming back: not for the phone
 // NAV on request (2026-11-19, parking assistant): switched off with its button while it had come up over Android Auto,
 // iDrive stays on its inactive parking screen and ignores the HMI plugin's focus events there (car log: 5 events, none
 // taken); the driver's NAV there brings Android Auto back (iDrive leaves the screen, our NAV handler sends the show
 // request). The plugin creates /fs/ram3/nbt-aa-hmi-nav; nbt_knob sends one NAV (C20 hard key bit 0x20, as the
 // controller would), which comes back here and is handled exactly like the driver's NAV.
 bool g_navKeyPending = false;
-// our own C20 (BACK guard, BACK, NAV) comes back here with our own device as its source (car 2026-11-19: 2032): while
+// our own C20 (NAV) comes back here with our own device as its source (car 2026-11-19: 2032): while
 // they can still come back, a C20 does not change the controller's addresses or counter
 long long g_ownC20Until = 0;
 // Our own NAV to iDrive (sendNavIfPending: after the parking assistant, iDrive's call screens) comes back to onKnob like
@@ -163,36 +159,10 @@ long long g_ownC20Until = 0;
 // in Android Auto, which toggled play / pause: the music paused for the call played again when the call was answered.
 // Until this time a NAV is ours: the show request still, never the audio action.
 volatile long long g_ownNavUntil = 0;
-// BACK guard (2026-11-17, test): iDrive's BACK goes back in its history and leaves Android Auto; bringing the page back
-// with a focus event per BACK made iDrive ignore the event after a burst (car log 2026-11-17, as on 2026-11-07). A BACK
-// pressed while iDrive's focus is in the split screen only brings the focus back (car: our BACK after a tilt right).
-// So on the driver's BACK press, while Android Auto is on screen, nbt_knob sends a tilt right (press + release) at once:
-// if iDrive acts on the BACK release, the focus is in the split screen by then and BACK just returns it. Our own tilt
-// is neither answered with a BACK nor sent to the phone. /fs/ram3/nbt-aa-guard tells the plugin to wait for it.
-// NBT_BACK_GUARD=0 off. Car 2026-11-17: works (iDrive acts on the BACK release).
-// Tilt left (2026-11-17, test): iDrive treats it as "back" too, but climbs one of the 8 nested hold levels per tilt (car
-// log: level 7 -> 0, then the entry page and one hold event). The same guard on the tilt left press: if iDrive acts on
-// the tilt release with its focus in the split screen, no level is used. NBT_TILT_GUARD=0 off.
-// Car 2026-11-17: the focus went into the split screen (its options entry showed) and came back only sometimes, slowly.
-// So the driver's tilt left release is now answered with a BACK, exactly like the tilt right fix: the focus returns at
-// once. Our own tilt coming back (press, then release, within 300 ms) is recognised in order, so the driver's release
-// is not mistaken for ours.
-bool g_backGuard = true;
-bool g_tiltGuard = true;
-bool g_guardPending = false;
-bool g_guardTiltLeft = false;          // the guard was for a tilt left: its release gets a BACK
-int g_ownTiltStage = 0;                // our guard tilt coming back: 2 = its press next, 1 = its release next
-long long g_ownTiltUntil = 0;
-long long g_ignoreTiltUntil = 0;       // our tilt right: not for the phone (onKnob)
 
 bool sessionRunning();
-// the controller tricks (BACK guard, tilt left guard, BACK after tilt right) only while the Android Auto picture is on
-// screen AND a phone session runs (user 2026-11-17: not in the Android Auto menus while no phone is connected)
-// "Debug interaction" in iDrive's Advanced settings (2026-11-28): the tricks off, to watch iDrive's own behaviour
-bool aaActive() {
-    return access("/fs/ram3/nbt-aa-hidden", F_OK) != 0 && sessionRunning() &&
-           access("/var/opt/hmi/data/rw/NbtAndroidAutoRT/decoder.debuginteraction", F_OK) != 0;
-}
+// the Android Auto picture is on screen AND a phone session runs (NAV's audio action)
+bool aaActive() { return access("/fs/ram3/nbt-aa-hidden", F_OK) != 0 && sessionRunning(); }
 
 void onC20(const nbt::most::View& m, void*) {
     if (m.len < 7) return;
@@ -208,26 +178,6 @@ void onC20(const nbt::most::View& m, void*) {
     const long long tm = nowMs();
     if (m.data[2] != 0xFF && tm >= g_ownC20Until) {
         g_ccsSrc = m.src; g_ccsDst = m.dst; g_ccsCounter = m.data[2]; g_counterKnown = true;
-    }
-    if (g_backGuard && m.data[5] == 0x00 && m.data[3] == 1 && (m.data[6] & 0x02) && tm >= g_ignoreBackUntil &&
-        aaActive())
-        g_guardPending = true;                                         // the driver's BACK press: tilt right now
-    if (m.data[5] == 0x1D && g_ownTiltStage && tm < g_ownTiltUntil) {   // our own guard tilt coming back
-        if (g_ownTiltStage == 2 && m.data[3] == 1 && m.data[4] == 2) { g_ownTiltStage = 1; pthread_mutex_unlock(&g_backMx); return; }
-        if (g_ownTiltStage == 1 && m.data[3] == 0) { g_ownTiltStage = 0; pthread_mutex_unlock(&g_backMx); return; }
-    }
-    if (tm >= g_ownTiltUntil) g_ownTiltStage = 0;
-    if (g_tiltGuard && m.data[5] == 0x1D && m.data[3] == 1 && m.data[4] == 8 && aaActive()) {
-        g_guardPending = true;                                         // the driver's tilt left press: the same guard
-        g_guardTiltLeft = true;
-    } else if (m.data[5] == 0x1D && m.data[3] == 0 && g_guardTiltLeft) {
-        g_guardTiltLeft = false;                                       // its release: BACK, as after a tilt right
-        if (aaActive()) g_backPending = true;
-    }
-    if (m.data[5] == 0x1D && m.data[3] == 1 && m.data[4] == 2) g_tiltRightDown = true;
-    else if (m.data[5] == 0x1D && m.data[3] == 0 && g_tiltRightDown) {
-        g_tiltRightDown = false;
-        if (aaActive()) g_backPending = true;   // Android Auto on screen
     }
     pthread_mutex_unlock(&g_backMx);
 }
@@ -248,9 +198,6 @@ nbt::most::Msg rebaseMsg(uint16_t src, uint16_t dst) {
     nbt::most::Msg m = hardKeyMsg(src, dst, 0xFF, false, 0x00);
     m.data[3] = 0x03;
     return m;
-}
-nbt::most::Msg backMsg(uint16_t src, uint16_t dst, uint8_t counter, bool down) {
-    return hardKeyMsg(src, dst, counter, down, 0x02);   // hard key, sensor BACK
 }
 
 // --- steering wheel roller -> media keys (see the header) ---
@@ -1176,31 +1123,6 @@ void favouritesIfNeeded(nbt::most::Client& most) {
     }
 }
 
-nbt::most::Msg tiltRightMsg(uint16_t src, uint16_t dst, uint8_t counter, bool down) {
-    nbt::most::Msg m = backMsg(src, dst, counter, down);
-    m.data[4] = down ? 0x02 : 0x00; m.data[5] = 0x1D; m.data[6] = 0x01;   // car trace: 01 1d c 01 02 1d 01 / 01 1d c 00 00 1d 01
-    return m;
-}
-
-// main thread: the tilt right of the BACK guard
-void sendGuardIfPending(nbt::most::Client& most) {
-    pthread_mutex_lock(&g_backMx);
-    if (!g_guardPending) { pthread_mutex_unlock(&g_backMx); return; }
-    g_guardPending = false;
-    const uint16_t src = g_ccsSrc, dst = g_ccsDst;
-    const uint8_t c1 = nextCounter(g_ccsCounter), c2 = nextCounter(c1);
-    g_ccsCounter = c2;
-    g_ignoreTiltUntil = nowMs() + 600;
-    g_ownC20Until = nowMs() + 600;
-    g_ownTiltStage = 2; g_ownTiltUntil = nowMs() + 300;
-    pthread_mutex_unlock(&g_backMx);
-    if (!src || !dst) { pthread_mutex_lock(&g_backMx); g_ownTiltStage = 0; pthread_mutex_unlock(&g_backMx); return; }
-    if (FILE* f = fopen("/fs/ram3/nbt-aa-guard", "w")) fclose(f);
-    most.send(tiltRightMsg(src, dst, c1, true));
-    usleep(30000);
-    most.send(tiltRightMsg(src, dst, c2, false));
-    printf("[Knob] BACK guard: tilt right to iDrive (%04X->%04X, counters %02x %02x)\n", src, dst, c1, c2);
-}
 
 // main thread: the NAV asked for by the HMI plugin (parking assistant off).
 // Addresses (car 2026-11-19, nbt_key --watch right after boot): the controller sends to the HMI at 2021 (C20 3002 ->
@@ -1233,45 +1155,10 @@ void sendNavIfPending(nbt::most::Client& most) {
     most.send(hardKeyMsg(src, dst, c2, false, 0x20));
 }
 
-// main thread: never send from the DSI callback thread
-void sendBackIfPending(nbt::most::Client& most) {
-    pthread_mutex_lock(&g_backMx);
-    if (!g_backPending) { pthread_mutex_unlock(&g_backMx); return; }
-    g_backPending = false;
-    const uint16_t src = g_ccsSrc, dst = g_ccsDst;
-    const uint8_t c1 = nextCounter(g_ccsCounter), c2 = nextCounter(c1);
-    g_ccsCounter = c2;
-    g_ignoreBackUntil = nowMs() + 600;
-    g_ownC20Until = nowMs() + 600;
-    pthread_mutex_unlock(&g_backMx);
-    if (!src || !dst) return;
-    printf("[Knob] tilt right: BACK to iDrive (%04X->%04X, counters %02x %02x)\n", src, dst, c1, c2);
-    most.send(backMsg(src, dst, c1, true));
-    usleep(100000);
-    most.send(backMsg(src, dst, c2, false));
-}
 
 void onKnob(const nbt::car::CcsEvent& ev, void*) {
     char line[48];
     int n;
-    if (!strcmp(ev.what, "TILT_RIGHT")) {
-        pthread_mutex_lock(&g_backMx);
-        const bool ours = nowMs() < g_ignoreTiltUntil;
-        pthread_mutex_unlock(&g_backMx);
-        if (ours) { printf("[Knob] TILT_RIGHT %s: our own (BACK guard), not for the phone\n", ev.down ? "down" : "up"); return; }
-    }
-    if (ev.keycode == nbt::AAK_BACK) {
-        pthread_mutex_lock(&g_backMx);
-        const bool ours = nowMs() < g_ignoreBackUntil;
-        pthread_mutex_unlock(&g_backMx);
-        if (ours) { printf("[Knob] %s %s: our own BACK, not for the phone\n", ev.what, ev.down ? "down" : "up"); return; }
-        // the driver's BACK while Android Auto is on screen (2026-11-17): iDrive goes back in its own history and leaves
-        // the page; this flag tells the HMI plugin to bring Android Auto back (aa_entry_plugin, Checker)
-        if (ev.down && access("/fs/ram3/nbt-aa-hidden", F_OK) != 0) {
-            int fd = open("/fs/ram3/nbt-aa-back", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (fd >= 0) close(fd);
-        }
-    }
     // NAV opens Android Auto (user 2026-11-17): iDrive still gets the key and opens its navigation, the show request
     // (HMI plugin, checked every 250 ms) brings Android Auto back over it. NBT_NAV_OPENS_AA=0: NAV stays with iDrive.
     // "Show using NAV button" unticked in the menu (2026-11-27): nav-off in the package, looked at on every press
@@ -1441,8 +1328,6 @@ int main(int argc, char** argv) {
     if (g_trip && !most.addRoute(0xE0, 0x00, nbt::most::kAny, 0xC, &onTripStatus, NULL))
         printf("[Knob] no room for the trip computer route\n");
     g_callPause = wheelKey("NBT_CALL_PAUSE", 1) != 0 && !trace;
-    g_backGuard = wheelKey("NBT_BACK_GUARD", 1) != 0 && !trace;
-    g_tiltGuard = wheelKey("NBT_TILT_GUARD", 1) != 0 && !trace;
     if (!most.addRoute(0xE5, 0x0F, 0xC06, 0xC, &onE5Periodic, NULL)) printf("[Knob] no room for the HMI address route\n");
     {
         const char* v = getenv("NBT_AUX_SOURCE");
@@ -1523,7 +1408,7 @@ int main(int argc, char** argv) {
             g_navKeyPending = true;
             pthread_mutex_unlock(&g_backMx);
         }
-        if (!trace) { sendGuardIfPending(most); sendBackIfPending(most); sendNavIfPending(most); }
+        if (!trace) sendNavIfPending(most);
         favouritesIfNeeded(most);
         playSwitchIfNeeded(most);
         navAudioIfNeeded(most);

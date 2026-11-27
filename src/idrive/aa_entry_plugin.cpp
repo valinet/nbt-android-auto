@@ -10,8 +10,8 @@
 //     pushes / tilts do nothing in iDrive (nbt_knob forwards them to the phone), and the picture is shown
 //     (/fs/ram3/nbt-aa-hidden removed). Same idea as the NBT-AAD reference rhmiapp state 13 and iDrive's own ST_CarPlay
 //     state.
-//   - BACK (or a tilt iDrive treats as back) pops iDrive out of 13: while Android Auto runs the press belonged to the
-//     phone, so iDrive is put straight back on 13 (the presenter waits 300 ms before hiding: no blink).
+//   - 13 is iDrive's TerminalUI page type in full screen (2026-11-28): iDrive gives it the controller, so tilts and BACK
+//     stay on it (no more re-holds after BACK / tilts, no more nbt_knob guards)
 //   - MENU / MEDIA / NAV / COM / MAP / OPTION leave the page the iDrive way: the picture hides, the session keeps running
 //     in the background; "Use ..." brings it back at once.
 //   - "Reboot" (Advanced; page 33 asks, its button leads to the inert page 34): reboots the head unit with nbt_reset
@@ -83,12 +83,6 @@ const char* const kLeave="/fs/ram3/nbt-aa-leave";
 // 0, level 7" -> "page left", never level 6), so it left Android Auto while the phone went back as well. nbt_knob writes
 // this flag on the driver's BACK while the picture is on screen; when the page is left within 2 s of it, the Checker
 // brings Android Auto back with one hold event (hold(): 1 per s, 10 per minute).
-const char* const kBackKey="/fs/ram3/nbt-aa-back";
-const char* const kGuard="/fs/ram3/nbt-aa-guard";   // nbt_knob's BACK guard (tilt right on the driver's BACK)
-// "Debug interaction" (Advanced, 2026-11-28): the picture stays hidden (nbt_decoder), nbt_knob's controller guards are
-// off and the plugin does not pull iDrive back to the hold state, so iDrive's own behaviour on it can be watched
-const char* const kDebugFlag="/var/opt/hmi/data/rw/NbtAndroidAutoRT/decoder.debuginteraction";
-bool debugInteraction() { return access(kDebugFlag,F_OK)==0; }
 // TerminalUI (2026-11-28): the hold state 13 is a <terminalUI> state (iDrive's CTerminalUIState, the stock
 // TerminalUIApp's page type). Its property 13 is TERMINALUI_FULLSCREEN (HmiMain3D CTerminalUIState::setProperty,
 // 0x896338e in this build: property id - 11 indexes its jump table; 13 with a bool true -> changeToFullscreeenView,
@@ -237,13 +231,10 @@ class Entry;
 // Problem: every tilt LEFT acted as BACK and every tilt RIGHT opened the split screen; each was undone with a focus event
 // (triggerEvent 52). After a few dozen of them the HMI stopped honouring the event (picture gone until a reboot).
 // Now: kHoldCount nested inert states (13 .. 13+N-1, each the parent of the next, focus event 52 targets the deepest).
-// 2026-11-17: one hold state only - BACK goes back in iDrive's history (it never climbed the levels) and tilt left is
-// kept on the hold state by nbt_knob's guards (tilt right, then BACK). If a guard misses, the entry page is reached and
-// one hold event brings Android Auto back (below).
-// Only when the entry page (10) is reached
-// one event goes out. Side panels / popups: at most one re-hold per 1.5 s. Never more than 10 events per minute, and no
-// periodic re-hold any more. The split screen itself is best switched off in iDrive (OPTION -> split screen).
-const unsigned kHoldCount=1;   // 2026-11-17: one hold state (was 8 nested ones; nbt_knob's BACK / tilt guards)
+// 2026-11-17: one hold state only. 2026-11-28: a TerminalUI page in full screen keeps the controller and BACK from
+// iDrive itself; the re-holds after BACK, tilt left / right and side panels are gone. Hold events now only for show
+// requests (NAV, start at boot, calls, the parking assistant) and "Use ...".
+const unsigned kHoldCount=1;
 // Decides, shortly after a hold state lost focus, what happened:
 //   another hold state has the focus (BACK climbed a level)         -> nothing
 //   a hard key was pressed (flag from nbt_knob)                      -> hide
@@ -727,36 +718,11 @@ void Checker::run() {
     if(!e||e->stopping||!e->app||e->holdFocused())return;    // BACK only climbed one hold level: nothing to do
     readStatus(&e->running);
     if(unlink(kLeave)==0){plog("check: leave key");g_driverLeftMs=now_ms();touch(kHidden);e->showUntilMs=0;e->showRetryAtMs=0;return;}
-    if(debugInteraction()){unlink(kBackKey);plog("check: hold state left; debug interaction: not pulled back",0);return;}
-    {   // BACK guard (nbt_knob): its tilt right moved the focus into the split screen; the driver's BACK release brings it
-        // back. Wait for that instead of sending a hold event (up to 1.5 s after the guard).
-        struct stat st;
-        if(stat(kGuard,&st)==0&&time(0)-st.st_mtime<=1&&now_ms()-e->lastFocusMs<1500){e->check(200);return;}
-    }
-    {
-        struct stat st;
-        const bool back=stat(kBackKey,&st)==0&&time(0)-st.st_mtime<=2;
-        unlink(kBackKey);
-        if(back&&e->running){
-            const long long wait=1000-(now_ms()-e->lastHoldMs);
-            if(wait>0){touch(kBackKey);e->check((unsigned)wait+50);plog("check: BACK left the page, hold in ms",(int)wait);return;}
-            plog("check: BACK left the page -> back to Android Auto");e->hold("hold (after BACK)");return;
-        }
-    }
     if(e->running&&now_ms()<e->showUntilMs){
         const long long wait=1000-(now_ms()-e->lastHoldMs);       // hold() sends at most one event per second
         if(wait>0){e->check((unsigned)wait+50);plog("check: focus taken after a show request, hold in ms",(int)wait);return;}
         e->showUntilMs=0;
         e->showHold("check: focus taken after a show request (NAV: iDrive navigation) -> hold");
-        return;
-    }
-    if(e->running&&e->holdVisible()){
-        // tilt right puts the iDrive focus into the split screen: taken back at once, so a normal tilt right is not noticed
-        // in Android Auto; a second tilt within 1.5 s still reaches the split screen menu (user request 2026-11-08: not
-        // aggressive, the HMI stopped honouring a flood of these events before)
-        long long tm=now_ms();
-        if(tm-e->lastSideHoldMs>=1500){e->lastSideHoldMs=tm;e->hold("check: side panel/popup -> hold");}
-        else plog("check: side panel/popup, waiting");
         return;
     }
     if(e->running&&e->statusFocused){e->hold("check: status page reached -> hold");return;}

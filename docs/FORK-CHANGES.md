@@ -41,9 +41,7 @@ screen.
 
 | Input | Behaviour now |
 | --- | --- |
-| Tilt right | Goes to the phone; nbt_knob then sends iDrive a BACK, so iDrive's focus returns from the split screen |
-| BACK | Goes to the phone; on the press nbt_knob sends iDrive a tilt right, so iDrive's BACK only returns the focus (`NBT_BACK_GUARD`) |
-| Tilt left | The same tilt right on the press, plus a BACK on the release (`NBT_TILT_GUARD`) |
+| Tilts, BACK | Go to the phone only: the hold state is iDrive's TerminalUI page in full screen (2026-11-28), which keeps them from iDrive (the earlier tilt right / BACK tricks sent to iDrive are gone) |
 | NAV | Brings Android Auto to the front (`NBT_NAV_OPENS_AA`) |
 | NAV in Android Auto | Android Auto audio: source not AUX → switch to AUX and start playback if the phone is not playing; source AUX → play / pause (`NBT_NAV_AUDIO`) |
 | MENU, COM, MEDIA, OPTION | Hide the picture at once and stay with iDrive |
@@ -180,7 +178,7 @@ Multimedia -> **CarPlay & Android Auto** always opens the menu. Settings are fla
 | Advanced > Limit frame rate * | `decoder.30fps` (the phone is asked for 30 fps) | unticked | boot.sh |
 | Advanced > Show frame rate | `decoder.showfps` | unticked | nbt_decoder, every second |
 | Advanced > Display volume changes | `decoder.novolume` when unticked | ticked | nbt_decoder, every second |
-| Advanced > Debug interaction | `decoder.debuginteraction` | unticked | nbt_decoder (every second): the picture stays hidden (session, sound, input go on); nbt_knob: its controller guards off; plugin: no pull back to the hold state. To watch what iDrive does on our pages |
+| Advanced > Debug interaction | `decoder.debuginteraction` | unticked | nbt_decoder (every second): the picture stays hidden (session, sound, input go on), to watch what iDrive does on our pages |
 | Advanced > Reboot | - | - | nbt_reset |
 | Settings > Reset | removes all of the above (and the older `anamorph`, `center800`, `classic`, `decoder.hw`, `start-at-boot.off`) | - | - |
 
