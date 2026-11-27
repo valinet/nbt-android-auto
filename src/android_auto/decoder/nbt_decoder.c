@@ -188,6 +188,9 @@ static struct {
     unsigned long total;
 } g_stat;
 
+/* pictures shown since the start (repeats not counted), for the frame rate overlay (decoder.showfps); under g_box.lock */
+static unsigned long g_fps_shown;
+
 static AVCodecContext* g_dec;
 static AVFrame* g_frame;
 
@@ -429,8 +432,10 @@ static void car_present_surface(const struct picture* p, int repeat)
         ++g_stat.present_errors;
     else if (repeat)
         ++g_stat.repeated;
-    else
+    else {
         ++g_stat.shown;
+        ++g_fps_shown;
+    }
     g_stat.upload_us += dt;
     if (dt > g_stat.upload_max)
         g_stat.upload_max = dt;
@@ -473,8 +478,10 @@ static void car_present(const struct picture* p, int repeat)
         ++g_stat.present_errors;
     else if (repeat)
         ++g_stat.repeated;
-    else
+    else {
         ++g_stat.shown;
+        ++g_fps_shown;
+    }
     g_stat.upload_us += dt;
     if (dt > g_stat.upload_max)
         g_stat.upload_max = dt;
@@ -966,6 +973,7 @@ static struct {
     int dirty;    /* the box composed since it was last put into the frame */
     int box_in;   /* the box is in the frame */
     int vol_in;   /* the volume popup is in the frame */
+    int fps_in;   /* the frame rate overlay is in the frame */
     int live;     /* the frame is in the mixer (uploaded, not aborted) */
     int upload;   /* the frame changed */
 } g_sub;
@@ -980,6 +988,15 @@ static struct {
     int off;           /* decoder.novolume */
     unsigned shown;    /* how many times, for the log */
 } g_vol = {-1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+/* the frame rate overlay's state (fps_policy) */
+enum { FPS_W = 104, FPS_H = 34, FPS_X = 12, FPS_Y = 12, FPS_RADIUS = 8 };
+static struct {
+    int on;               /* decoder.showfps */
+    int value;            /* the number in the frame, -1 none */
+    unsigned long last;   /* g_fps_shown at the last second */
+    long long at;
+} g_fps = {0, -1, 0, 0};
 
 /* a palette entry as OnSubPicturePalette reads it: Y, Cr, Cb (BT.601 video range), each colour channel truncated and
  * stored as a byte without clamping (outside 0-255 it wraps): the nearest entry that stays inside */
@@ -1116,7 +1133,9 @@ static void panel_open(void)
     g_panel.ok = 0;
     g_panel.shown = 0;
     g_sub_live = g_sub_failed = 0;
-    g_sub.box_in = g_sub.vol_in = g_sub.live = g_sub.upload = 0;
+    g_sub.box_in = g_sub.vol_in = g_sub.fps_in = g_sub.live = g_sub.upload = 0;
+    g_fps.on = 0;
+    g_fps.value = -1;
     g_vol.seq = -1;
     if (g_opt.width < PANEL_X + PANEL_W) {
         say("panel: window only %d wide (split screen), no box", g_opt.width);
@@ -1205,7 +1224,7 @@ static void sub_commit(void)
     if (!g_sub.upload)
         return;
     g_sub.upload = 0;
-    if (!g_sub.box_in && !g_sub.vol_in) {
+    if (!g_sub.box_in && !g_sub.vol_in && !g_sub.fps_in) {
         if (g_sub.live) {
             g_sub.live = g_sub_live = 0;
             const int r = ((nv_sub_abort_fn)nv_method(g_car.nv, NV_SUB_ABORT))(g_car.nv, g_car.stream);
@@ -1478,11 +1497,98 @@ static void vol_policy(long long now)
     }
 }
 
-/* once a second: the settings iDrive's menu changes while we run (aa_entry_plugin): the box's size, the volume popup;
- * a few access() / one small read, nothing else */
+/* ---- the frame rate overlay (user 2026-11-27, "Show frame rate" in iDrive's Advanced settings) ----
+ * decoder.showfps in the package: a small box in the top left corner with the pictures shown in the last second
+ * (repeats of the last picture not counted), updated every second. Off: nothing is drawn or uploaded, only the flag is
+ * looked at once a second (settings_poll). Same subpicture as the box (full width only), the volume popup's colours. */
+static uint8_t g_fps_px[FPS_W * FPS_H];
+
+/* coverage (of 16, 4 x 4 samples) of a w x h rectangle with corners of radius r, inset px inside it */
+static int round_cover(int col, int row, int w, int h, double r0, double inset)
+{
+    int in = 0;
+    const double r = r0 - inset;
+    for (int sy = 0; sy < 4; ++sy)
+        for (int sx = 0; sx < 4; ++sx) {
+            const double x = col + (sx + 0.5) / 4, y = row + (sy + 0.5) / 4;
+            if (x < inset || y < inset || x > w - inset || y > h - inset)
+                continue;
+            const double cx = x < r0 ? r0 : x > w - r0 ? w - r0 : x;
+            const double cy = y < r0 ? r0 : y > h - r0 ? h - r0 : y;
+            in += (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
+        }
+    return in;
+}
+
+static void fps_draw(int value)
+{
+    char text[16];
+    snprintf(text, sizeof(text), "%d fps", value);
+    static uint8_t cov[FPS_W * FPS_H];
+    memset(cov, 0, sizeof(cov));
+    int x = 0;
+    for (const char* t = text; *t; ++t)
+        x += panel_glyphs[panel_glyph((unsigned char)*t)].advance;
+    x = (FPS_W - x) / 2;
+    const int top = (FPS_H - PANEL_FONT_HEIGHT) / 2;
+    for (const char* t = text; *t; ++t) {
+        const int g = panel_glyph((unsigned char)*t);
+        const unsigned char* bits = panel_bits + panel_glyphs[g].offset;
+        const int gw = panel_glyphs[g].width, gx = x + panel_glyphs[g].left;
+        for (int row = 0; row < PANEL_FONT_HEIGHT; ++row)
+            for (int col = 0; col < gw; ++col) {
+                const int px = gx + col, py = top + row;
+                if (px >= 0 && px < FPS_W && py >= 0 && py < FPS_H && bits[row * gw + col] > cov[py * FPS_W + px])
+                    cov[py * FPS_W + px] = bits[row * gw + col];
+            }
+        x += panel_glyphs[g].advance;
+    }
+    for (int row = 0; row < FPS_H; ++row)
+        for (int col = 0; col < FPS_W; ++col) {
+            const int cover = round_cover(col, row, FPS_W, FPS_H, FPS_RADIUS, 0);
+            const int inner = round_cover(col, row, FPS_W, FPS_H, FPS_RADIUS, 1);
+            int index = cover > inner ? VOL_LIGHT : VOL_DARK, alpha = VOL_ALPHA;
+            const unsigned tc = cov[row * FPS_W + col];
+            if (tc >= 40) {
+                index = tc < 110 ? VOL_LIGHT : tc < 190 ? VOL_EDGE : VOL_PALE;
+                alpha = 15;
+            }
+            alpha = alpha * cover / 16;
+            g_fps_px[row * FPS_W + col] = alpha ? (uint8_t)(alpha << 4 | index) : 0;
+        }
+}
+
+/* once a second: the frame rate into the overlay while it is on and the window is shown */
+static void fps_policy(long long now)
+{
+    pthread_mutex_lock(&g_box.lock);
+    const unsigned long shown = g_fps_shown;
+    pthread_mutex_unlock(&g_box.lock);
+    const long long dt = g_fps.at ? now - g_fps.at : 0;
+    const int value = dt > 0 ? (int)((shown - g_fps.last) * 1000 / dt) : -1;
+    g_fps.last = shown;
+    g_fps.at = now;
+    const int want = g_fps.on && g_win.shown == 1 && value >= 0;
+    if (!want) {
+        if (g_sub.fps_in) {
+            sub_put(FPS_X, FPS_Y, FPS_W, FPS_H, 0);
+            g_sub.fps_in = 0;
+            g_fps.value = -1;
+        }
+        return;
+    }
+    if (g_sub.fps_in && value == g_fps.value)
+        return;
+    fps_draw(value);
+    sub_put(FPS_X, FPS_Y, FPS_W, FPS_H, g_fps_px);
+    g_sub.fps_in = 1;
+    g_fps.value = value;
+}
+
+/* once a second: the settings iDrive's menu changes while we run (aa_entry_plugin): the box's size, the volume popup,
+ * the frame rate overlay; a few access() / one small read, nothing else */
 static void settings_poll(long long now)
 {
-    (void)now;
     char size[16] = "";
     panel_read(RT_DIR "/decoder.panelsize", size, sizeof(size));
     if (strcmp(size, g_panel_size) != 0) {
@@ -1505,6 +1611,15 @@ static void settings_poll(long long now)
             vol_base(0, 1);
         }
     }
+    const int fps_on = access(RT_DIR "/decoder.showfps", F_OK) == 0;
+    if (fps_on != g_fps.on) {
+        g_fps.on = fps_on;
+        say("frame rate overlay %s", fps_on ? "on" : "off");
+    }
+    if (g_fps.on || g_sub.fps_in)
+        fps_policy(now);
+    else
+        g_fps.at = 0;
 }
 
 /* every window policy round (main thread). The box: drawn every second (the short-term average speed integrates
@@ -1517,7 +1632,7 @@ static void panel_policy(void)
         return;
     if (g_sub_failed) {   /* the picture first: nothing more in it for the rest of this program */
         say("panel: VideoRenderFrame failed with the subpicture in the picture, box and volume off");
-        g_sub.box_in = g_sub.vol_in = 0;
+        g_sub.box_in = g_sub.vol_in = g_sub.fps_in = 0;
         g_sub.upload = 1;
         sub_commit();
         g_panel.ok = 0;
