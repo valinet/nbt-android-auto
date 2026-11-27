@@ -1488,6 +1488,15 @@ static void handle_command(struct session* s, const struct bp* body)
                     else
                         flag_clear("/fs/ram3/nbt-aa-voice");
                 }
+    } else if (!strcmp(type, "disableBluetooth") && params) {
+        /* the iPhone's own Bluetooth address: nbt_knob turns the NBT's Bluetooth audio off for it while the file
+         * exists (native_service removes it when the session ends), so after a call the music stays with CarPlay */
+        const char* id = bp_text(params, "deviceID");
+        char text[40];
+        if (id && strlen(id) == 17) {
+            snprintf(text, sizeof(text), "%s\n", id);
+            flag_set("/fs/ram3/nbt-aa-bt-off", text);
+        }
     } else if (!strcmp(type, "requestViewArea") && params) {
         struct bp* p = bp_dict();
         bp_set(p, "uuid", bp_str(MAIN_UUID));

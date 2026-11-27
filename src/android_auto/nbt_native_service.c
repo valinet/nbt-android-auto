@@ -827,6 +827,7 @@ int main(int argc, char** argv)
      * live AA session (oneplus_native --capture-video) reads. Runs for the whole service life, independent of sessions.
      * nbt_knob needs /opt/sys/lib (libsys_dsi_colibry.so.3 and its dependencies; car 2026-11-07: "Library cannot be found"
      * with the Cinemo library path), so it gets its own library path for the fork. */
+    unlink("/fs/ram3/nbt-aa-bt-off");   /* no CarPlay session yet (see nbt_knob's Bluetooth audio) */
     if (!access("nbt_knob", X_OK) && (!mkfifo("input.fifo", 0600) || errno == EEXIST)) {
         char* args[] = {"./nbt_knob", 0};
         /* steering-wheel voice button: a long press starts the Google Assistant while Android Auto is on screen (the
@@ -917,6 +918,7 @@ int main(int argc, char** argv)
             }
             report("draining", session);
             end(&carplay);
+            unlink("/fs/ram3/nbt-aa-bt-off");   /* nbt_knob: the NBT's Bluetooth audio for this iPhone back on */
             if (type == PHONE_BRIDGE) {
                 if (!stopping)
                     sleep(2);

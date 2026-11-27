@@ -488,6 +488,170 @@ void onSourceResult(const nbt::most::View& m, void*) {
     }
 }
 
+// --- CarPlay: the NBT's Bluetooth audio off for the iPhone while CarPlay runs (2026-11-27) ---
+// After a call over the NBT's Bluetooth the iPhone may play music to the NBT's Bluetooth audio (A2DP) instead of
+// CarPlay. The iPhone asks for it itself: its AirPlay command disableBluetooth {deviceID: its Bluetooth address}.
+// iDrive's device configuration, "Audio" unticked / ticked (car trace 2026-11-27, most-bt.txt): HMI -> 204C FBlock 54
+// (Bluetooth, Connectivity's "BTDCustomerSelection") inst 00 fkt C13 op 6 StartResultAck {handle hi, lo, address (6),
+// selection}: 01 Audio off, 03 on (telephone + audio); 204C answers ResultAck (D) {handle}, and the phone reconnects
+// (its telephone too, a few seconds). It is iDrive's own setting, kept by Connectivity. A selection the phone already
+// has is not answered at all (car 2026-11-27: Audio on while it was on); so once 204C has been heard since the start,
+// three unanswered (or refused) requests count as "already so". Before that (at a start the FBlock may not be up)
+// Audio on is tried every 5 s until it is answered or 204C is heard; Audio off gives up after a minute.
+// nbt_carplay writes kBtOff (the address) on disableBluetooth, native_service removes it when the session ends. While
+// it exists, Audio is off for that address; when it goes, Audio is on again at once. kBtRestore (flash) keeps the
+// address while Audio may be off: written only when nbt_knob turns it off (not when it holds that address already),
+// removed when it is on again. Left over at a start (the NBT went down during a session): Audio on at once; a CarPlay
+// session that comes later turns it off again.
+// NBT_BT_AUDIO=0 off; NBT_BT_SEL_OFF / NBT_BT_SEL_ON (hex) the two selections.
+const char* const kBtOff = "/fs/ram3/nbt-aa-bt-off";
+const char* const kBtRestore = "/var/opt/hmi/data/rw/NbtAndroidAutoRT/bt-audio-restore";
+bool g_btAudio = true;
+unsigned g_btSelOff = 0x01, g_btSelOn = 0x03;
+pthread_mutex_t g_btMx = PTHREAD_MUTEX_INITIALIZER;
+unsigned g_btHandle = 0;              // under g_btMx: our pending request (0 = none)
+int g_btResult = 0;                   // under g_btMx: 1 done, -1 refused, 0 waiting
+bool g_btUnitSeen = false;            // under g_btMx: 204C has sent something since the start
+// main thread
+bool g_btOff = false;                 // Audio is off for g_btOffAddr (done, or taken as already so)
+uint8_t g_btOffAddr[6];
+bool g_btOn = false;                  // Audio on is still to be done for g_btOnAddr
+uint8_t g_btOnAddr[6];
+uint8_t g_btReqAddr[6];
+unsigned g_btReqSel = 0;
+int g_btFails = 0;
+long long g_btSentMs = 0, g_btNextMs = 0;
+
+bool parseBtAddr(const char* t, uint8_t a[6]) {
+    unsigned v[6];
+    if (sscanf(t, "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return false;
+    for (int i = 0; i < 6; ++i) { if (v[i] > 0xFF) return false; a[i] = (uint8_t)v[i]; }
+    return true;
+}
+bool readBtAddr(const char* path, uint8_t a[6]) {
+    char t[64] = {0};
+    FILE* f = fopen(path, "r");
+    if (!f) return false;
+    const size_t n = fread(t, 1, sizeof(t) - 1, f);
+    fclose(f);
+    t[n] = 0;
+    return parseBtAddr(t, a);
+}
+
+void btSend(nbt::most::Client& most, const uint8_t a[6], unsigned sel) {
+    static unsigned handle = 0x0100;
+    handle = (handle + 1) & 0xFFFF;
+    if (handle < 0x0100) handle = 0x0100;                         // keep clear of the HMI's small handles
+    nbt::most::Msg m;
+    m.txType = 0; m.varTag = 1; m.varVal = 0;
+    m.dst = 0x204C; m.src = (uint16_t)most.deviceId(); m.fblock = 0x54; m.inst = 0x00; m.fkt = 0xC13; m.opType = 0x6;
+    m.hdrTag = 0xFFFFu;
+    const uint8_t d[9] = { (uint8_t)(handle >> 8), (uint8_t)handle, a[0], a[1], a[2], a[3], a[4], a[5], (uint8_t)sel };
+    m.data.assign(d, d + 9);
+    if (sel != g_btReqSel || memcmp(a, g_btReqAddr, 6)) g_btFails = 0;   // a new request, not a retry
+    memcpy(g_btReqAddr, a, 6); g_btReqSel = sel; g_btSentMs = nowMs();
+    pthread_mutex_lock(&g_btMx);
+    g_btHandle = handle; g_btResult = 0;
+    pthread_mutex_unlock(&g_btMx);
+    const bool ok = most.send(m);
+    printf("[BT] %02x:%02x:%02x:%02x:%02x:%02x Audio %s (selection %02X, handle %04X): %s\n", a[0], a[1], a[2], a[3], a[4],
+           a[5], sel == g_btSelOff ? "off" : "on", sel, handle, ok ? "sent" : "FAILED");
+}
+
+// everything from FBlock 54 inst 00: 204C's answer to our request (ResultAck D {handle}, or an error 9 / F), any
+// other message from 204C marks it up; our own request comes back too (op 6): ignored
+void onBtUnit(const nbt::most::View& m, void*) {
+    if (m.src != 0x204C) return;
+    unsigned handle = 0;
+    bool ours = false;
+    pthread_mutex_lock(&g_btMx);
+    g_btUnitSeen = true;
+    if (m.fkt == 0xC13 && m.len >= 2 && (m.op == 0xD || m.op == 0x9 || m.op == 0xF)) {
+        handle = (unsigned)m.data[0] << 8 | m.data[1];
+        ours = g_btHandle && handle == g_btHandle && g_btResult == 0;
+        if (ours) g_btResult = m.op == 0xD ? 1 : -1;
+    }
+    pthread_mutex_unlock(&g_btMx);
+    if (!ours) return;
+    printf("[BT] handle %04X: %s", handle, m.op == 0xD ? "done" : "refused");
+    for (size_t i = 2; i < m.len && i < 8; ++i) printf(" %02x", m.data[i]);
+    printf("\n");
+}
+
+void btWriteMarker(const uint8_t a[6]) {
+    uint8_t kept[6];
+    if (readBtAddr(kBtRestore, kept) && !memcmp(kept, a, 6)) return;   // holds it already: no flash write
+    if (FILE* f = fopen(kBtRestore, "w")) {
+        fprintf(f, "%02x:%02x:%02x:%02x:%02x:%02x\n", a[0], a[1], a[2], a[3], a[4], a[5]);
+        fclose(f);
+    }
+}
+
+// the request is over (done, or taken as already so)
+void btDone() {
+    if (g_btReqSel == g_btSelOff) {
+        g_btOff = true;
+        memcpy(g_btOffAddr, g_btReqAddr, 6);
+        if (g_btOn && !memcmp(g_btOnAddr, g_btReqAddr, 6)) g_btOn = false;
+    } else {
+        if (g_btOn && !memcmp(g_btOnAddr, g_btReqAddr, 6)) g_btOn = false;
+        if (g_btOff && !memcmp(g_btOffAddr, g_btReqAddr, 6)) g_btOff = false;
+        if (!g_btOff) unlink(kBtRestore);
+    }
+}
+
+// main thread, every loop
+void btAudioIfNeeded(nbt::most::Client& most) {
+    if (!g_btAudio || most.state() != nbt::most::kUp) return;
+    const long long now = nowMs();
+    pthread_mutex_lock(&g_btMx);
+    const unsigned pending = g_btHandle;
+    const int result = g_btResult;
+    const bool seen = g_btUnitSeen;
+    if (pending && (result || now - g_btSentMs >= 3000)) g_btHandle = 0;
+    pthread_mutex_unlock(&g_btMx);
+    if (pending) {
+        if (!result && now - g_btSentMs < 3000) return;                     // waiting for the answer
+        if (result == 1) { g_btFails = 0; btDone(); }
+        else {
+            ++g_btFails;
+            const bool off = g_btReqSel == g_btSelOff;
+            if ((seen && g_btFails >= 3) || (off && g_btFails >= 12)) {
+                printf("[BT] selection %02X: %s %d times, taken as already so\n", g_btReqSel,
+                       result ? "refused" : "no answer", g_btFails);
+                g_btFails = 0;
+                btDone();
+            } else {
+                printf("[BT] selection %02X: %s, again in 5 s%s\n", g_btReqSel, result ? "refused" : "no answer",
+                       seen ? "" : " (204C not heard yet)");
+                g_btNextMs = now + 5000;
+            }
+        }
+    }
+    if (now < g_btNextMs) return;
+    g_btNextMs = now + 500;
+    uint8_t want[6];
+    if (readBtAddr(kBtOff, want)) {                                         // a CarPlay session for `want`
+        if (g_btOff && !memcmp(want, g_btOffAddr, 6)) return;              // off already
+        if (g_btOff) {                                                      // another phone first: its Audio back on
+            g_btOn = true;
+            memcpy(g_btOnAddr, g_btOffAddr, 6);
+            g_btOff = false;
+        }
+        if (g_btOn && memcmp(g_btOnAddr, want, 6)) { btSend(most, g_btOnAddr, g_btSelOn); return; }
+        g_btOn = false;                                                     // the same phone: off instead of on
+        btWriteMarker(want);
+        btSend(most, want, g_btSelOff);
+        return;
+    }
+    if (g_btOff) {                                                          // the session is over
+        g_btOn = true;
+        memcpy(g_btOnAddr, g_btOffAddr, 6);
+        g_btOff = false;
+    }
+    if (g_btOn) btSend(most, g_btOnAddr, g_btSelOn);
+}
+
 // --- BMW's voice control over Android Auto music (2026-11-20) ---
 // A short press of the steering-wheel voice button starts the car's own voice dialog, which mutes the music; the phone
 // would keep playing into the mute. While Android Auto's source plays and the phone plays, the short press pauses the
@@ -1263,6 +1427,18 @@ int main(int argc, char** argv) {
     if (!most.addRoute(0x03, 0x00, 0xC03, 0xC, &onSource, NULL)) printf("[Knob] no room for the audio source route\n");
     if (!most.addRoute(0x03, 0x00, 0x053, nbt::most::kAny, &onSourceResult, NULL)) printf("[Knob] no room for the switch result route\n");
     if (!most.addRoute(0x03, 0x00, 0x054, nbt::most::kAny, &onSourceResult, NULL)) printf("[Knob] no room for the remove result route\n");
+    g_btAudio = wheelKey("NBT_BT_AUDIO", 1) != 0 && !trace;
+    if (const char* v = getenv("NBT_BT_SEL_OFF")) if (*v) g_btSelOff = (unsigned)strtoul(v, 0, 16) & 0xFF;
+    if (const char* v = getenv("NBT_BT_SEL_ON")) if (*v) g_btSelOn = (unsigned)strtoul(v, 0, 16) & 0xFF;
+    if (g_btAudio && !most.addRoute(0x54, 0x00, nbt::most::kAny, nbt::most::kAny, &onBtUnit, NULL)) {
+        printf("[Knob] no room for the Bluetooth result route\n");
+        g_btAudio = false;
+    }
+    if (g_btAudio && readBtAddr(kBtRestore, g_btOnAddr)) {   // Audio may still be off from an earlier session
+        g_btOn = true;
+        printf("[BT] Audio may have been left off for %02x:%02x:%02x:%02x:%02x:%02x: on again\n", g_btOnAddr[0],
+               g_btOnAddr[1], g_btOnAddr[2], g_btOnAddr[3], g_btOnAddr[4], g_btOnAddr[5]);
+    }
     {
         const char* v = getenv("NBT_PROMPT_CONN");             // hex, 0 = no prompts over another source
         g_promptConn = trace ? 0 : (v && *v ? (unsigned)strtoul(v, 0, 16) : 0xB8u);
@@ -1322,6 +1498,7 @@ int main(int argc, char** argv) {
         navAudioIfNeeded(most);
         if (!trace) { navLongIfNeeded(); wheelLongIfNeeded(); tripIfNeeded(most); }
         if (!trace) promptRouteIfNeeded(most);
+        if (!trace) btAudioIfNeeded(most);
         voiceIfNeeded();
         callIfNeeded();
         clock_gettime(CLOCK_MONOTONIC, &t);

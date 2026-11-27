@@ -52,6 +52,22 @@ the iPhone then treats both as one car; not confirmed on this car. If the iPhone
 sent again without it. Without the file nothing changes. The plain workaround: Bluetooth "Audio" off for the iPhone
 in iDrive.
 
+### Bluetooth audio off while CarPlay runs
+
+The car-bt test did not help (car 2026-11-27). The iPhone asks for it itself: right after a session starts it sends
+the AirPlay command `disableBluetooth {deviceID: its Bluetooth address}`. nbt_carplay writes that address into
+`/fs/ram3/nbt-aa-bt-off`; native_service removes the file when the session ends. nbt_knob then does what iDrive's
+device configuration does when "Audio" is unticked (MOST trace 2026-11-27): FBlock 54 (Bluetooth, address 204C)
+inst 00 fkt C13 op StartResultAck `{handle, address (6 bytes), selection}`, selection 01 = Audio off, 03 = telephone
+and audio. The phone reconnects for a few seconds, its telephone too. When the file goes, Audio is on again at once.
+While Audio is off the address is kept in `NbtAndroidAutoRT/bt-audio-restore` (written only when nbt_knob turns it
+off, removed when it is on again). Left over at a start (the NBT went down during a session): Audio on at once; a
+CarPlay session that comes later turns it off again. A selection the phone already has is not answered (car
+2026-11-27), so once 204C has been heard, three unanswered requests count as done; before that Audio on is retried
+every 5 s. Log lines `[BT]` in knob.log. `NBT_BT_AUDIO=0`
+turns it off; `NBT_BT_SEL_OFF` / `NBT_BT_SEL_ON` (hex) change the two selections. While CarPlay runs, iDrive's menu
+shows Audio unticked for the iPhone.
+
 ## The car's authentication chip
 
 `dev-i2c` (`/opt/sys/etc/i2c-conf_x86.cfg`) has it on I2C bus 0 as slave `acp`, address 0x20, node
