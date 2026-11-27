@@ -25,6 +25,8 @@
       <raAction id="723"/>
       <raAction id="724"/>
       <raAction id="725"/>
+      <!-- the TerminalUI hold state's action (controller events it takes) -->
+      <raAction id="726"/>
       <raAction id="731"/>
       <raAction id="732"/>
       <!-- "Reboot": page 33 asks, its button leads to the inert page 34, whose focus runs nbt_reset -->
@@ -618,7 +620,8 @@
           <checkbox id="832" action="722" model="797" text="Limit frame rate *"/>
           <checkbox id="833" action="723" model="798" text="Show frame rate"/>
           <checkbox id="834" action="724" model="799" text="Display volume changes"/>
-          <!-- the picture stays hidden (nbt_decoder), to watch what iDrive does on our pages -->
+          <!-- the picture stays hidden (nbt_decoder), nbt_knob's guards and the plugin's pull-backs off: to watch what
+               iDrive does on our pages -->
           <checkbox id="835" action="725" model="789" text="Debug interaction"/>
           <button id="86" action="80" model="82" text="Reboot"/>
         </components>
@@ -643,13 +646,15 @@
           <label id="89" model="85" text="Restarting ..."/>
         </components>
       </hmiState>
-      <!-- hold state 13: nothing selectable, so controller turns / pushes / tilts do nothing in iDrive (nbt_knob's guards
-           keep iDrive's focus here). focusEvent 52 / 54 and the pool lead here. -->
-      <hmiState id="13" parentId="10" textModel="3" text="CarPlay &amp; Android Auto">
+      <!-- hold state 13 (2026-11-28: iDrive's TerminalUI page type, as the stock TerminalUIApp's state 3; the plugin
+           sets its TERMINALUI_FULLSCREEN property 13): nothing selectable, so controller turns / pushes / tilts do
+           nothing in iDrive (nbt_knob's guards keep iDrive's focus here). focusEvent 52 / 54 and the pool lead here. -->
+      <!-- only the attributes the stock state has (action, id): an unknown one might make iDrive reject the file -->
+      <terminalUI action="726" id="13">
         <components>
           <label id="41" model="4" text="Connect phone via USB"/>
         </components>
-      </hmiState>
+      </terminalUI>
     </hmiStates>
   </pluginApp>
 </pluginApps>

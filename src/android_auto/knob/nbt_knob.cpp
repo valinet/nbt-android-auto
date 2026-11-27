@@ -188,7 +188,11 @@ long long g_ignoreTiltUntil = 0;       // our tilt right: not for the phone (onK
 bool sessionRunning();
 // the controller tricks (BACK guard, tilt left guard, BACK after tilt right) only while the Android Auto picture is on
 // screen AND a phone session runs (user 2026-11-17: not in the Android Auto menus while no phone is connected)
-bool aaActive() { return access("/fs/ram3/nbt-aa-hidden", F_OK) != 0 && sessionRunning(); }
+// "Debug interaction" in iDrive's Advanced settings (2026-11-28): the tricks off, to watch iDrive's own behaviour
+bool aaActive() {
+    return access("/fs/ram3/nbt-aa-hidden", F_OK) != 0 && sessionRunning() &&
+           access("/var/opt/hmi/data/rw/NbtAndroidAutoRT/decoder.debuginteraction", F_OK) != 0;
+}
 
 void onC20(const nbt::most::View& m, void*) {
     if (m.len < 7) return;

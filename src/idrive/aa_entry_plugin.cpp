@@ -85,6 +85,16 @@ const char* const kLeave="/fs/ram3/nbt-aa-leave";
 // brings Android Auto back with one hold event (hold(): 1 per s, 10 per minute).
 const char* const kBackKey="/fs/ram3/nbt-aa-back";
 const char* const kGuard="/fs/ram3/nbt-aa-guard";   // nbt_knob's BACK guard (tilt right on the driver's BACK)
+// "Debug interaction" (Advanced, 2026-11-28): the picture stays hidden (nbt_decoder), nbt_knob's controller guards are
+// off and the plugin does not pull iDrive back to the hold state, so iDrive's own behaviour on it can be watched
+const char* const kDebugFlag="/var/opt/hmi/data/rw/NbtAndroidAutoRT/decoder.debuginteraction";
+bool debugInteraction() { return access(kDebugFlag,F_OK)==0; }
+// TerminalUI (2026-11-28): the hold state 13 is a <terminalUI> state (iDrive's CTerminalUIState, the stock
+// TerminalUIApp's page type). Its property 13 is TERMINALUI_FULLSCREEN (HmiMain3D CTerminalUIState::setProperty,
+// 0x896338e in this build: property id - 11 indexes its jump table; 13 with a bool true -> changeToFullscreeenView,
+// false -> changeToNormalView). Set on every focus of state 13. Its raAction (726) is what the state sends for the
+// controller events it takes (onViewEvent / mapKeyCodeToA4AParam): only counted and logged for now.
+const unsigned kTuiFullscreenProperty=13, kTuiAction=726;
 const unsigned kEntryState=10, kHoldState=13, kEvHold=52, kFocus=1, kVisible=11, kStatusModel=4;
 // --- the menu (user 2026-11-27): Multimedia -> "CarPlay & Android Auto" always opens page 10:
 //   "Use CarPlay / Use Android Auto" (button 801, model 750: by the phone's kind) -> hold state 13 while a session runs,
@@ -569,6 +579,13 @@ public:
         if(e->running&&!e->shownListen)e->app->updateModel(kListenModel,true);   // ticked at once, nbt_knob follows
         return true;
     }
+    // the TerminalUI hold state's action: the controller events iDrive gives the state (see kTuiAction)
+    static bool tuiAction(void* self,const bmw::Parcel&) {
+        static int count=0;
+        (void)self;
+        if(++count<=50||count%100==0)plog("TerminalUI action, count",count);
+        return true;
+    }
     // "Reset values": Yes = every setting to its default; both back to page 40
     static bool resetYes(void* self,const bmw::Parcel&) {
         Entry* e=static_cast<Entry*>(self);
@@ -605,7 +622,12 @@ public:
         e->lastFocusMs=now_ms();
         plog(focused?"hold focus 1, level":"hold focus 0, level",(int)s->idx);
         e->target.start();
-        if(focused){unlink(kLeave);if(!g_pdcActive)unlink(kHidden);touch(kRequest);e->ignoredHolds=0;e->startPolling(500);}
+        if(focused){
+            unlink(kLeave);if(!g_pdcActive)unlink(kHidden);touch(kRequest);e->ignoredHolds=0;e->startPolling(500);
+            static bmw::Parcel* on=new bmw::Parcel(true);
+            e->app->setProperty(kHoldState,kTuiFullscreenProperty,*on);
+            plog("TerminalUI: fullscreen property set on the hold state",(int)kHoldState);
+        }
         else {
             if(access(kHidden,F_OK)!=0)g_aaLeftMs=now_ms();   // lost the focus with the picture on screen
             e->check(150);             // decide after the HMI has finished its transition (see Checker)
@@ -705,6 +727,7 @@ void Checker::run() {
     if(!e||e->stopping||!e->app||e->holdFocused())return;    // BACK only climbed one hold level: nothing to do
     readStatus(&e->running);
     if(unlink(kLeave)==0){plog("check: leave key");g_driverLeftMs=now_ms();touch(kHidden);e->showUntilMs=0;e->showRetryAtMs=0;return;}
+    if(debugInteraction()){unlink(kBackKey);plog("check: hold state left; debug interaction: not pulled back",0);return;}
     {   // BACK guard (nbt_knob): its tilt right moved the focus into the split screen; the driver's BACK release brings it
         // back. Wait for that instead of sending a hold event (up to 1.5 s after the guard).
         struct stat st;
@@ -882,6 +905,8 @@ bmw::IPluginApp* create(bmw::IDispatcher& d,const char* name,const bmw::Bundle& 
     bmw::ActionDelegate onYes={&entry,&Entry::resetYes};
     bmw::ActionDelegate onNo={&entry,&Entry::resetNo};
     app->addHandler(kListenAction,onListen);
+    bmw::ActionDelegate onTui={&entry,&Entry::tuiAction};
+    app->addHandler(kTuiAction,onTui);
     app->addHandler(kResetYes,onYes);
     app->addHandler(kResetNo,onNo);
     for(unsigned i=0;i<kHoldCount;++i){
