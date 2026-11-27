@@ -26,6 +26,7 @@ Used whenever `nbt_decoder` is installed, at 60 fps; no file is needed. Optional
 | `decoder.fuelscale` | Microlitres of fuel per count of CDS `engine.consumption`, x1000 (default 1000), for the box's instantaneous consumption |
 | `decoder.panelbg` | The box's background as hex RRGGBBAA (default 000000B4, translucent black; FF = opaque). Text and icons are white on a dark background and black on a light one; the 1 px outline is derived from it (lighter on dark, darker on light). Grey is exact; with a coloured one red and blue may come out swapped (not traced) |
 | `decoder.panelflip` | The box's bitmap: 1 rows reversed, 2 columns reversed, 3 both (default 0) |
+| `decoder.novolume` | No volume popup over the picture |
 | `decoder.panelsize` | The box's size, set by "Widget size" in iDrive's Android Auto page: `full` = full width (384 px); none (the default) or `small` = 256 px (same right edge, x 1003) with two pages, long NAV cycles page 1, page 2, off; `trip` / `car` = 256 px with only that page, long NAV on / off. Read when the session starts |
 | `decoder.args` | One line of extra arguments for `nbt_decoder` |
 | `decoder.bgvideo` | Keep decoding while the Android Auto / CarPlay page is not on screen. Default (since 2026-11-25): nothing is decoded then; Android Auto gets video focus NATIVE and pauses its video, `nbt_carplay` drops the iPhone's frames; back on the page both send a fresh key frame |
@@ -274,3 +275,20 @@ A box at x 875, y 96, 384x167 with a "Trip computer" title line (20 px from the 
   page 1, page 2 (`/fs/ram3/nbt-aa-panel-page2`), off, page 1 again; each session starts on page 1; a page change is
   drawn and uploaded at once (not waiting for the once-a-second update). Trip only / Car only: one page, no dots, long
   NAV shows / hides it.
+
+## Volume popup
+
+iDrive's own volume popup is behind Android Auto's / CarPlay's picture, so the decoder draws one into the picture, in
+the same subpicture as the trip box: the stock look (a photo of the car's screen, 2026-11-27) without its second row
+(the audio's name), 604x44, centred, its middle at 2/3 of the height. A dark translucent panel with a light top edge,
+the speaker (crossed out when muted), a dark bar with a light outline and a cream fill with a bright end.
+
+- Level: `/fs/ram3/nbt-aa-volume`, one line `<number> <level> <maximum> <muted 0/1>`, written on every volume change
+  (the number counts up, so the same level again shows it too). The first line the decoder reads is only the starting
+  point. Read every 50 ms while the window is shown.
+- Who writes it: not done yet (2026-11-27). The volume knob's / keys' messages on MOST still have to be traced
+  (`nbt_knob --trace`). To try it by hand: `echo "1 12 40 0" > /fs/ram3/nbt-aa-volume`, then the same with 2, 3, ...
+- Shown for 3 s after the last change (the stock popup's time is not measured), only while Android Auto's window is
+  shown (on iDrive's own pages iDrive's popup is visible).
+- Palette (16 entries for both): 0 transparent, 1..9 the box (its background to its text colour), 10..15 the popup's
+  colours. The subpicture is taken out of the picture (`SubPictureAbort`) when neither is shown.

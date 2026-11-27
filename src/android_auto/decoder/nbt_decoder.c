@@ -943,14 +943,41 @@ enum { SUB_SURFACE_AT = 0x114, SUB_FLAG_AT = 0x1a8 };
  * (the order of the library's colour table in the surface is not traced). */
 static unsigned g_bg_r = 0, g_bg_g = 0, g_bg_b = 0, g_bg_a = 0xB4;
 
+/* The subpicture's palette (16 entries, one for everything in it): 0 = transparent (its colour unused), 1..9 = the
+ * trip box, from its background to its text colour (sub_box), 10..15 = the volume popup's own colours (vol_draw). */
+enum { SUB_BOX_FIRST = 1, SUB_BOX_STEPS = 9 };
+enum { VOL_DARK = 10, VOL_LIGHT, VOL_EDGE, VOL_TRACK, VOL_CREAM, VOL_PALE };
+static const unsigned char g_vol_rgb[6][3] = {
+    {26, 29, 31},     /* VOL_DARK: the panel */
+    {60, 66, 68},     /* VOL_LIGHT: the panel's row below its top edge */
+    {180, 190, 192},  /* VOL_EDGE: the bar's outline, the panel's top edge */
+    {4, 8, 12},       /* VOL_TRACK: the bar's empty part */
+    {250, 246, 196},  /* VOL_CREAM: the bar's fill */
+    {252, 253, 246},  /* VOL_PALE: the fill's edges and bright end, the speaker */
+};
+
 static struct {
     void* stream;   /* the stream the subpicture belongs to */
     int fw, fh;     /* its size: the stream's buffers */
     int x, y, flip;
     uint8_t* frame;   /* fw x fh, one byte per pixel (alpha << 4 | index), 0 = transparent */
     uint8_t box[PANEL_W * PANEL_H_MAX], last[PANEL_W * PANEL_H_MAX];
-    int dirty;   /* composed since the last upload */
+    int dirty;    /* the box composed since it was last put into the frame */
+    int box_in;   /* the box is in the frame */
+    int vol_in;   /* the volume popup is in the frame */
+    int live;     /* the frame is in the mixer (uploaded, not aborted) */
+    int upload;   /* the frame changed */
 } g_sub;
+
+/* the volume popup's state (vol_policy) */
+static struct {
+    long seq;          /* the last line's number; -1 = none read yet (the first is only the starting point) */
+    int level, max, muted;
+    long long until;   /* shown until (monotonic ms) */
+    long long read_at; /* the file is read at most every VOL_POLL_MS */
+    int off;           /* decoder.novolume */
+    unsigned shown;    /* how many times, for the log */
+} g_vol = {-1, 0, 0, 0, 0, 0, 0, 0};
 
 /* a palette entry as OnSubPicturePalette reads it: Y, Cr, Cb (BT.601 video range), each colour channel truncated and
  * stored as a byte without clamping (outside 0-255 it wraps): the nearest entry that stays inside */
@@ -985,7 +1012,7 @@ static void sub_ycrcb(double r, double g, double b, uint8_t out[3])
  * background, black on a light one (decoder.panelbg's luminance, BT.601); a 1 px outline derived from the background:
  * a quarter of the way towards the text colour, at least as opaque as the background, half way to opaque. Layers,
  * each "over" the one below (straight alpha): background, outline, text; then the rounded corners. Every colour lies
- * between background and text colour: s = 0..1 along that line, palette entries 1..15 = 15 steps of it (sub_open).
+ * between background and text colour: s = 0..1 along that line, palette entries 1..9 = 9 steps of it (panel_open).
  * Byte per pixel: NVVAOutputSurfacePutBitsIndexed with format 1 (as OnSubPictureFrame calls it) builds its table as
  * alpha << 4 | index, alpha 0-15 (libnmsdk 2014). decoder.panelflip: bit 0 rows reversed, bit 1 columns (default 0). */
 static void sub_box(void)
@@ -1010,7 +1037,7 @@ static void sub_box(void)
             s = na > 0 ? (t + s * a * (1 - t)) / na : 0;
             a = na;
         }
-        const int alpha = (int)(a * outer * 15 + 0.5), index = 1 + (int)(s * 14 + 0.5);
+        const int alpha = (int)(a * outer * 15 + 0.5), index = SUB_BOX_FIRST + (int)(s * (SUB_BOX_STEPS - 1) + 0.5);
         g_sub.box[i] = alpha ? (uint8_t)(alpha << 4 | index) : 0;
     }
 }
@@ -1067,6 +1094,8 @@ static void panel_open(void)
     g_panel.ok = 0;
     g_panel.shown = 0;
     g_sub_live = g_sub_failed = 0;
+    g_sub.box_in = g_sub.vol_in = g_sub.live = g_sub.upload = 0;
+    g_vol.seq = -1;
     if (g_opt.width < PANEL_X + PANEL_W) {
         say("panel: window only %d wide (split screen), no box", g_opt.width);
         return;
@@ -1113,14 +1142,16 @@ static void panel_open(void)
         say("panel: out of memory");
         return;
     }
-    /* palette: 0 = transparent (its colour unused), 1..15 = background to text colour */
+    /* palette: see g_vol_rgb */
     const unsigned luma = (299 * g_bg_r + 587 * g_bg_g + 114 * g_bg_b) / 1000;
-    const double fg = luma > 128 ? 0 : 255;
+    const double fg = luma > 128 ? 0 : 255, n = SUB_BOX_STEPS - 1;
     uint8_t palette[48];
     sub_ycrcb(0, 0, 0, palette);
-    for (int k = 0; k < 15; ++k)
-        sub_ycrcb(g_bg_r + (fg - g_bg_r) * k / 14, g_bg_g + (fg - g_bg_g) * k / 14, g_bg_b + (fg - g_bg_b) * k / 14,
-                  palette + 3 * (k + 1));
+    for (int k = 0; k < SUB_BOX_STEPS; ++k)
+        sub_ycrcb(g_bg_r + (fg - g_bg_r) * k / n, g_bg_g + (fg - g_bg_g) * k / n, g_bg_b + (fg - g_bg_b) * k / n,
+                  palette + 3 * (SUB_BOX_FIRST + k));
+    for (int k = 0; k < 6; ++k)
+        sub_ycrcb(g_vol_rgb[k][0], g_vol_rgb[k][1], g_vol_rgb[k][2], palette + 3 * (VOL_DARK + k));
     void* nv = g_car.nv;
     const uint32_t conf[2] = {(uint32_t)g_sub.fw, (uint32_t)g_sub.fh};
     const int r1 = ((nv_sub_configure_fn)nv_method(nv, NV_SUB_CONFIGURE))(nv, g_car.stream, conf);
@@ -1137,25 +1168,39 @@ static void panel_open(void)
         return;
     g_panel.ok = 1;
     g_panel.text_at = 0;
+    g_vol.off = access(RT_DIR "/decoder.novolume", F_OK) == 0;
 }
 
-/* the box into the subpicture if its picture changed; the first upload after a hide also shows it */
-static void sub_upload(void)
+/* a w x h block of the frame at x, y: from src (rows of w), or cleared (src 0); clipped to the frame */
+static void sub_put(int x, int y, int w, int h, const uint8_t* src)
 {
-    sub_box();
-    const size_t n = (size_t)g_panel.w * g_panel.h;
-    if (g_panel.shown && !memcmp(g_sub.box, g_sub.last, n))
-        return;
-    memcpy(g_sub.last, g_sub.box, n);
-    for (int row = 0; row < g_panel.h; ++row) {
-        const int y = g_sub.y + row;
-        if (y < 0 || y >= g_sub.fh)
+    for (int row = 0; row < h; ++row) {
+        const int fy = y + row;
+        if (fy < 0 || fy >= g_sub.fh)
             continue;
-        for (int col = 0; col < g_panel.w; ++col) {
-            const int x = g_sub.x + col;
-            if (x >= 0 && x < g_sub.fw)
-                g_sub.frame[(size_t)y * g_sub.fw + x] = g_sub.box[row * g_panel.w + col];
+        for (int col = 0; col < w; ++col) {
+            const int fx = x + col;
+            if (fx >= 0 && fx < g_sub.fw)
+                g_sub.frame[(size_t)fy * g_sub.fw + fx] = src ? src[row * w + col] : 0;
         }
+    }
+    g_sub.upload = 1;
+}
+
+/* the frame into the mixer: uploaded while anything is in it (the first upload after an abort also puts it back into
+ * the mixer), taken out of the mixer (SubPictureAbort) when nothing is */
+static void sub_commit(void)
+{
+    if (!g_sub.upload)
+        return;
+    g_sub.upload = 0;
+    if (!g_sub.box_in && !g_sub.vol_in) {
+        if (g_sub.live) {
+            g_sub.live = g_sub_live = 0;
+            const int r = ((nv_sub_abort_fn)nv_method(g_car.nv, NV_SUB_ABORT))(g_car.nv, g_car.stream);
+            say("panel: nothing to show, out of the picture (SubPictureAbort 0x%08x)", r);
+        }
+        return;
     }
     const long long t0 = now_ms();
     /* shown from time 0 to the end of time: VideoRenderFrame blends it while start <= now <= end */
@@ -1166,32 +1211,200 @@ static void sub_upload(void)
         say("panel: SubPictureFrame 0x%08x after %lld ms", r, dt);
     if (r < 0)
         return;
-    if (!g_panel.shown)
-        say("panel: shown (subpicture flag %d)", *((const uint8_t*)g_car.stream + SUB_FLAG_AT));
-    g_panel.shown = 1;
-    g_sub_live = 1;
+    if (!g_sub.live)
+        say("panel: in the picture (subpicture flag %d)", *((const uint8_t*)g_car.stream + SUB_FLAG_AT));
+    g_sub.live = g_sub_live = 1;
 }
 
-static void panel_hide(void)
+/* the box into the frame if its picture changed */
+static void box_put(void)
 {
-    if (!g_panel.ok || !g_panel.shown)
+    sub_box();
+    const size_t n = (size_t)g_panel.w * g_panel.h;
+    if (g_sub.box_in && !memcmp(g_sub.box, g_sub.last, n))
         return;
-    g_panel.shown = 0;
-    g_sub_live = 0;
-    const int r = ((nv_sub_abort_fn)nv_method(g_car.nv, NV_SUB_ABORT))(g_car.nv, g_car.stream);
-    say("panel: hidden (SubPictureAbort 0x%08x)", r);
+    memcpy(g_sub.last, g_sub.box, n);
+    sub_put(g_sub.x, g_sub.y, g_panel.w, g_panel.h, g_sub.box);
+    if (!g_sub.box_in)
+        say("panel: box shown");
+    g_sub.box_in = 1;
+    g_panel.shown = 1;
 }
 
-/* every window policy round (main thread): drawn every second (the short-term average speed integrates there);
- * uploaded only while Android Auto's window is shown, the box hides and shows with that window by itself (it is part
- * of the window's picture); long NAV (/fs/ram3/nbt-aa-panel-off) hides it */
+static void box_take(void)
+{
+    if (!g_sub.box_in)
+        return;
+    sub_put(g_sub.x, g_sub.y, g_panel.w, g_panel.h, 0);
+    g_sub.box_in = 0;
+    g_panel.shown = 0;
+    say("panel: box hidden");
+}
+
+/* ---- the volume popup (user 2026-11-27) ----
+ * iDrive's own volume popup is behind Android Auto's / CarPlay's picture, so ours is drawn into it: the stock look
+ * (photo of the car's screen, the user's, 2026-11-27: a dark translucent panel with a light top edge, a speaker, a
+ * dark bar with a light outline and a cream fill with a bright end), without the stock popup's second row (the
+ * audio's name, "Navigation"), so 44 px instead of about 90. 604 px wide, centred, its middle at 2/3 of the height.
+ * Sizes measured on that photo (a camera picture of the screen, so to a pixel or two).
+ * The level comes from /fs/ram3/nbt-aa-volume, one line "<number> <level> <maximum> <muted 0/1>", written whenever
+ * the volume changes (the number counts up, so the same level again, at the maximum, shows the popup too). Who writes
+ * it is not there yet (2026-11-27: the volume's messages on MOST still have to be traced); by hand:
+ *   echo "1 12 40 0" > /fs/ram3/nbt-aa-volume
+ * The first line read is only the starting point. Shown for VOL_SHOW_MS after the last change (the stock timing is
+ * not measured), only while Android Auto's window is shown (otherwise iDrive's own popup is on screen).
+ * decoder.novolume (file in the package): never shown. */
+#define VOL_FILE "/fs/ram3/nbt-aa-volume"
+enum { VOL_W = 604, VOL_H = 44, VOL_SHOW_MS = 3000, VOL_POLL_MS = 50 };
+enum { VOL_ICON_X = 48, VOL_ICON_W = 22, VOL_ICON_H = 26 };
+enum { VOL_BAR_X = 108, VOL_BAR_W = VOL_W - VOL_BAR_X - 50, VOL_BAR_H = 22, VOL_GLOW = 12 };
+enum { VOL_RADIUS = 3, VOL_ALPHA = 12 };   /* the panel's opacity (of 15): the map shows through, as on the photo */
+static uint8_t g_vol_px[VOL_W * VOL_H];
+
+static int vol_x(void)
+{
+    return (g_sub.fw - VOL_W) / 2;
+}
+
+static int vol_y(void)
+{
+    return g_sub.fh * 2 / 3 - VOL_H / 2;
+}
+
+/* squared distance of the point from the segment a-b */
+static double seg_dist2(double px, double py, double ax, double ay, double bx, double by)
+{
+    const double dx = bx - ax, dy = by - ay, l = dx * dx + dy * dy;
+    double t = l > 0 ? ((px - ax) * dx + (py - ay) * dy) / l : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const double ex = ax + t * dx - px, ey = ay + t * dy - py;
+    return ex * ex + ey * ey;
+}
+
+/* the speaker: a magnet (a small box) and a cone, 2 px outlines, as the stock icon; muted: a slash across */
+static int vol_speaker(double x, double y, int muted)
+{
+    static const double pts[][2] = {{1.5, 8.5}, {7.5, 8.5}, {19.5, 1.5}, {19.5, 24.5}, {7.5, 17.5}, {1.5, 17.5}};
+    const int n = (int)(sizeof(pts) / sizeof(pts[0]));
+    for (int i = 0; i < n; ++i) {
+        const double* a = pts[i];
+        const double* b = pts[(i + 1) % n];
+        if (seg_dist2(x, y, a[0], a[1], b[0], b[1]) <= 1.0)
+            return 1;
+    }
+    if (seg_dist2(x, y, 7.5, 8.5, 7.5, 17.5) <= 1.0)   /* where the magnet meets the cone */
+        return 1;
+    return muted && seg_dist2(x, y, -1, 26, 22, 0) <= 1.21;
+}
+
+/* rounded corners: coverage of the pixel, 4 x 4 samples */
+static int vol_cover(int col, int row)
+{
+    int in = 0;
+    for (int sy = 0; sy < 4; ++sy)
+        for (int sx = 0; sx < 4; ++sx) {
+            const double x = col + (sx + 0.5) / 4, y = row + (sy + 0.5) / 4;
+            const double cx = x < VOL_RADIUS ? VOL_RADIUS : x > VOL_W - VOL_RADIUS ? VOL_W - VOL_RADIUS : x;
+            const double cy = y < VOL_RADIUS ? VOL_RADIUS : y > VOL_H - VOL_RADIUS ? VOL_H - VOL_RADIUS : y;
+            in += (x - cx) * (x - cx) + (y - cy) * (y - cy) <= VOL_RADIUS * VOL_RADIUS;
+        }
+    return in;
+}
+
+/* the popup for level / max into g_vol_px (alpha << 4 | index) */
+static void vol_draw(int level, int max, int muted)
+{
+    static const unsigned char bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+    const int by = (VOL_H - VOL_BAR_H) / 2, iy = (VOL_H - VOL_ICON_H) / 2;
+    const int inner = VOL_BAR_W - 4;   /* outline and a 1 px gap on each side */
+    int fill = max > 0 ? (int)((double)inner * (level < 0 ? 0 : level > max ? max : level) / max + 0.5) : 0;
+    for (int row = 0; row < VOL_H; ++row)
+        for (int col = 0; col < VOL_W; ++col) {
+            const int cover = vol_cover(col, row);
+            int index, alpha = VOL_ALPHA;
+            /* the panel: a light top edge, a lighter row below it (a bevel), then the panel's colour */
+            index = row == 1 ? VOL_LIGHT : VOL_DARK;
+            if (row == 0) {
+                index = VOL_EDGE;
+                alpha = 9;
+            }
+            const int bx = col - VOL_BAR_X, bry = row - by;
+            if (bx >= 0 && bx < VOL_BAR_W && bry >= 0 && bry < VOL_BAR_H) {   /* the bar */
+                alpha = 15;
+                if (bx == 0 || bx == VOL_BAR_W - 1 || bry == 0 || bry == VOL_BAR_H - 1)
+                    index = VOL_EDGE;
+                else if (bx >= 2 && bx < 2 + fill && bry >= 2 && bry < VOL_BAR_H - 2) {
+                    /* cream, its top and bottom rows and its end paler; the end fades in (dithered) */
+                    const int end = 2 + fill - bx;   /* 1 = the last column */
+                    const int glow = end <= VOL_GLOW && bayer[row & 3][col & 3] * VOL_GLOW >= (end - 1) * 16;
+                    index = bry == 2 || bry == VOL_BAR_H - 3 || end <= 2 || glow ? VOL_PALE : VOL_CREAM;
+                }
+                else
+                    index = VOL_TRACK;
+            }
+            const int ix = col - VOL_ICON_X, iry = row - iy;
+            if (ix >= -2 && ix < VOL_ICON_W + 2 && iry >= -2 && iry < VOL_ICON_H + 2 && vol_speaker(ix + 0.5, iry + 0.5, muted)) {
+                index = VOL_PALE;
+                alpha = 15;
+            }
+            alpha = alpha * cover / 16;
+            g_vol_px[row * VOL_W + col] = alpha ? (uint8_t)(alpha << 4 | index) : 0;
+        }
+}
+
+/* every window policy round: a new line in VOL_FILE shows the popup, VOL_SHOW_MS after the last one it goes */
+static void vol_policy(long long now)
+{
+    if (g_vol.off)
+        return;
+    if (now >= g_vol.read_at) {
+        g_vol.read_at = now + VOL_POLL_MS;
+        char line[64] = "";
+        long seq;
+        int level, max, muted = 0;
+        FILE* f = fopen(VOL_FILE, "r");
+        if (f) {
+            if (!fgets(line, sizeof(line), f))
+                line[0] = 0;
+            fclose(f);
+        }
+        if (sscanf(line, "%ld %d %d %d", &seq, &level, &max, &muted) >= 3 && seq != g_vol.seq) {
+            const int first = g_vol.seq == -1;
+            g_vol.seq = seq;
+            if (!first && g_win.shown == 1) {
+                if (g_vol.shown++ < 20)
+                    say("volume: %d of %d%s", level, max, muted ? ", muted" : "");
+                if (!g_sub.vol_in || level != g_vol.level || max != g_vol.max || muted != g_vol.muted) {
+                    vol_draw(level, max, muted);
+                    sub_put(vol_x(), vol_y(), VOL_W, VOL_H, g_vol_px);
+                }
+                g_vol.level = level;
+                g_vol.max = max;
+                g_vol.muted = muted;
+                g_vol.until = now + VOL_SHOW_MS;
+                g_sub.vol_in = 1;
+            }
+        }
+    }
+    if (g_sub.vol_in && now >= g_vol.until) {
+        sub_put(vol_x(), vol_y(), VOL_W, VOL_H, 0);
+        g_sub.vol_in = 0;
+    }
+}
+
+/* every window policy round (main thread). The box: drawn every second (the short-term average speed integrates
+ * there); put into the picture only while Android Auto's window is shown, it hides and shows with that window by
+ * itself (it is part of the window's picture); long NAV (/fs/ram3/nbt-aa-panel-off) hides it. The volume popup:
+ * vol_policy. One upload for both. */
 static void panel_policy(void)
 {
     if (!g_panel.ok)
         return;
-    if (g_sub_failed) {   /* the picture first: no box for the rest of this program */
-        say("panel: VideoRenderFrame failed with the box in the picture, box off");
-        panel_hide();
+    if (g_sub_failed) {   /* the picture first: nothing more in it for the rest of this program */
+        say("panel: VideoRenderFrame failed with the subpicture in the picture, box and volume off");
+        g_sub.box_in = g_sub.vol_in = 0;
+        g_sub.upload = 1;
+        sub_commit();
         g_panel.ok = 0;
         return;
     }
@@ -1210,14 +1423,14 @@ static void panel_policy(void)
         panel_compose();
         g_sub.dirty = 1;
     }
-    if (!want) {
-        panel_hide();
-        return;
+    if (!want)
+        box_take();
+    else if (g_win.shown == 1 && g_panel.have && g_sub.dirty) {
+        g_sub.dirty = 0;
+        box_put();
     }
-    if (g_win.shown != 1 || !g_panel.have || !g_sub.dirty)
-        return;
-    g_sub.dirty = 0;
-    sub_upload();
+    vol_policy(now);
+    sub_commit();
 }
 
 /* ---- display thread ---- */
