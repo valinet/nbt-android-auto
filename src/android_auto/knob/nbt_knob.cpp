@@ -331,6 +331,17 @@ bool sessionRunning() {
     return strstr(buf, "state=running") != 0;
 }
 
+// the session is CarPlay's (native_service's kind= line)
+bool carPlaySession() {
+    char buf[160];
+    FILE* f = fopen("/fs/ram3/nbt-aa-state", "r");
+    if (!f) return false;
+    const size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    return strstr(buf, "kind=carplay") != 0;
+}
+
 int mediaState() {   // 2 = playing, 3 = paused, 0 = unknown
     FILE* f = fopen("/fs/ram3/nbt-aa-media", "r");
     if (!f) return 0;
@@ -997,8 +1008,11 @@ void listenIfNeeded(nbt::most::Client& most) {
         g_prevMedia = 2;                                           // our own play: no second switch request
         g_mediaNextCheck = nowMs() + 3000;
     } else if (st == 2) return;                                    // on it and playing: nothing to do
-    wheelKeyLine(85, 1, "LISTEN_PLAY");
-    wheelKeyLine(85, 0, "LISTEN_PLAY");
+    // never a pause (user 2026-11-28): CarPlay gets PLAY 126 (the media HID's play, nothing when it already plays; its
+    // playback state can be unknown); Android Auto PLAY_PAUSE 85 only when not playing (126 dropped its session)
+    const unsigned key = carPlaySession() ? 126 : 85;
+    wheelKeyLine(key, 1, "LISTEN_PLAY");
+    wheelKeyLine(key, 0, "LISTEN_PLAY");
 }
 
 void favouritesIfNeeded(nbt::most::Client& most) {
