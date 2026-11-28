@@ -47,7 +47,7 @@ screen.
 | OPTION | Hides the picture; iDrive opens the hold page's option panel ("CarPlay" / "Android Auto") with Settings, which also has "Connect automatically" and "Listen to ..."; BACK there goes back to the picture |
 | MENU | Hides the picture; the full screen page keeps MENU from iDrive, so the page goes back to normal view and nbt_knob sends MENU to iDrive again once the driver's MENU is released |
 | COM, MEDIA, NAV | Hide the picture at once and stay with iDrive (NAV no longer brings Android Auto up, 2026-11-28: iDrive acts on the press, so a long NAV cannot be ours) |
-| Wheel roller | Up = PREVIOUS, down = NEXT (swapped 2026-11-28), push = PLAY_PAUSE, only while the source is AUX (`NBT_WHEEL_AUX_ONLY`) |
+| Wheel roller | Up = PREVIOUS, down = NEXT (swapped 2026-11-28), push = PLAY_PAUSE, only while the source is AUX (`NBT_WHEEL_AUX_ONLY`; sent 300 ms after the release). Double push (within 300 ms, `NBT_PUSH_DOUBLE_MS`): the info overlay's next state (small: page 1, page 2, off; large: on, off) |
 | Roller at start | The first status after start (`ff`) is ignored; only `80` / `7e` count as steps (fixed a one-time song skip at boot) |
 | Phone button | Roller and push stay with iDrive's contact list until 4 s without a turn (`NBT_LIST_HOLD_S`) |
 

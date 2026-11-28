@@ -210,6 +210,13 @@ bool g_wheelPushDown = false;     // under g_backMx (callback thread and main lo
 bool g_wheelPushLong = false;     // this press was long (handled), its release does nothing
 long long g_wheelPushDownMs = 0;
 int g_pushLongMs = 700;
+// double push (user 2026-11-28): two short pushes within NBT_PUSH_DOUBLE_MS (300, from the first release to the second
+// press) step the info overlay on (overlayNextPage: small page 1, page 2, off; large on, off). So a
+// single short push's play / pause now goes out NBT_PUSH_DOUBLE_MS after its release (wheelLongIfNeeded). 0 = off.
+int g_pushDoubleMs = 300;
+bool g_wheelPushPending = false;  // under g_backMx: a short push released, its play / pause not sent yet
+bool g_wheelPushSecond = false;   // ... and the next press came in time
+long long g_wheelPushUpMs = 0;
 uint16_t g_wheelLastFkt = 0;
 uint8_t g_wheelLastVal = 0;
 long long g_wheelLastMs = 0;
@@ -236,6 +243,33 @@ long long g_listUntil = 0;      // roller for iDrive's phone list until then
 unsigned g_listHoldMs = 4000;
 
 void onVoiceButton(const nbt::most::View& m);   // below, with the audio source
+
+// the info overlay's next state (user 2026-11-28): small page 1 -> page 2 -> off -> page 1; large on -> off -> on
+// (nbt_decoder: hidden while /fs/ram3/nbt-aa-panel-off exists, page 2 while /fs/ram3/nbt-aa-panel-page2 does)
+void overlayNextPage(const char* why) {
+    bool large = false;
+    if (FILE* f = fopen("/var/opt/hmi/data/rw/NbtAndroidAutoRT/decoder.panelsize", "r")) {
+        char size[16] = "";
+        if (fgets(size, sizeof(size), f)) large = !strncmp(size, "full", 4);
+        fclose(f);
+    }
+    const char* const off = "/fs/ram3/nbt-aa-panel-off";
+    const char* const page2 = "/fs/ram3/nbt-aa-panel-page2";
+    if (access(off, F_OK) == 0) {
+        unlink(page2);
+        unlink(off);
+        printf("[Wheel] %s: info overlay on%s\n", why, large ? "" : ", page 1");
+    } else if (!large && access(page2, F_OK) != 0) {
+        const int fd = open(page2, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) close(fd);
+        printf("[Wheel] %s: info overlay, page 2\n", why);
+    } else {
+        const int fd = open(off, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) close(fd);
+        unlink(page2);
+        printf("[Wheel] %s: info overlay off\n", why);
+    }
+}
 bool g_phoneDown = false;
 void onWheel(const nbt::most::View& m, void*) {
     if (m.fkt == 0x512) { onVoiceButton(m); return; }                    // voice button (PTTButton1)
@@ -284,14 +318,21 @@ void onWheel(const nbt::most::View& m, void*) {
             g_wheelPushDown = true;
             g_wheelPushDownMs = t;
             g_wheelPushLong = false;
+            if (g_wheelPushPending && t - g_wheelPushUpMs < g_pushDoubleMs) g_wheelPushSecond = true;
             pthread_mutex_unlock(&g_backMx);
             return;
         }
         if (v != 0 || !g_wheelPushDown) { pthread_mutex_unlock(&g_backMx); return; }
         g_wheelPushDown = false;
         const bool wasLong = g_wheelPushLong;
+        const bool second = g_wheelPushSecond;
+        if (second || wasLong) { g_wheelPushPending = false; g_wheelPushSecond = false; }
+        else if (g_pushDoubleMs > 0) { g_wheelPushPending = true; g_wheelPushUpMs = t; }
         pthread_mutex_unlock(&g_backMx);
-        if (wasLong || !g_wheelPush || !wheelAllowed("WHEEL_PUSH")) return;
+        if (wasLong) return;
+        if (second) { overlayNextPage("double push"); return; }
+        if (g_pushDoubleMs > 0) return;                                  // play / pause later, if no second push
+        if (!g_wheelPush || !wheelAllowed("WHEEL_PUSH")) return;
         wheelKeyLine(g_wheelPush, 1, "WHEEL_PUSH");
         wheelKeyLine(g_wheelPush, 0, "WHEEL_PUSH");
     }
@@ -301,6 +342,14 @@ void onWheel(const nbt::most::View& m, void*) {
 // Toggles /fs/ram3/nbt-aa-avgspeed (RAM). On: the file holds the start time (ms, monotonic) and nbt_decoder's trip
 // computer box averages driving.speedActual from then on, shown on its title line; off: the file is removed.
 void wheelLongIfNeeded() {
+    pthread_mutex_lock(&g_backMx);
+    const bool single = g_wheelPushPending && !g_wheelPushSecond && nowMs() - g_wheelPushUpMs >= g_pushDoubleMs;
+    if (single) g_wheelPushPending = false;
+    pthread_mutex_unlock(&g_backMx);
+    if (single && g_wheelPush && wheelAllowed("WHEEL_PUSH")) {   // no second push: the single push's play / pause
+        wheelKeyLine(g_wheelPush, 1, "WHEEL_PUSH");
+        wheelKeyLine(g_wheelPush, 0, "WHEEL_PUSH");
+    }
     pthread_mutex_lock(&g_backMx);
     const bool go = g_wheelPushDown && !g_wheelPushLong && nowMs() - g_wheelPushDownMs >= g_pushLongMs;
     if (go) g_wheelPushLong = true;
@@ -1370,6 +1419,7 @@ int main(int argc, char** argv) {
     g_playAux = wheelKey("NBT_PLAY_AUX", 1) != 0 && !trace;
     g_auxOpensAa = wheelKey("NBT_AUX_OPENS_AA", 1) != 0 && !trace;
     g_pushLongMs = wheelKey("NBT_PUSH_LONG_MS", 700);
+    g_pushDoubleMs = wheelKey("NBT_PUSH_DOUBLE_MS", 300);
     g_trip = wheelKey("NBT_TRIP", 1) != 0 && !trace;
     if (g_trip && !most.addRoute(0xE0, 0x00, nbt::most::kAny, 0xC, &onTripStatus, NULL))
         printf("[Knob] no room for the trip computer route\n");

@@ -272,7 +272,8 @@ A box at x 875, y 96, 384x167 with a "Trip computer" title line (20 px from the 
   range and tank, instantaneous consumption, outside temperature and battery, coolant and oil. The short-term average
   speed is at the end of the title on both pages while it runs; otherwise two dots there show the page, as Android
   Auto shows pages (same size, the current one white, the other grey). As tall as the full box. Small: page 2 while
-  `/fs/ram3/nbt-aa-panel-page2` exists (until 2026-11-28 long NAV went page 1, page 2, off; nothing sets it now); each
+  `/fs/ram3/nbt-aa-panel-page2` exists (nbt_knob: a double push of the steering wheel roller goes page 1,
+  page 2, off, page 1; until 2026-11-28 long NAV did); each
   session starts on page 1; a page change is drawn and uploaded at once (not waiting for the once-a-second update).
   Trip only / Car only: one page, no dots.
 
