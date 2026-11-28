@@ -23,6 +23,7 @@ The plugin starts with iDrive, can bring Android Auto to the front from anywhere
 | Menu | Picture mode buttons renamed "Split screen" / "Full width", hint lines removed; mode change works right after boot |
 | Restart system | On the Android Auto page: reboots the head unit with `nbt_reset` (UDS 11 01 through the gateway); the separate NbtReboot plugin is gone. From a laptop: `scripts/nbt_reset.py` |
 | Start at boot | Replaced by "Connect automatically" (2026-11-27, file `gate-on` when unticked): ticked, the phone is taken when plugged in and the first session of a boot comes to the front |
+| App opened at boot | With the TerminalUI hold page in the app, iDrive takes our focus events only once one of our pages has been opened since the HMI start (2026-11-28: start at boot and long BACK did nothing after a boot; fine with the hold page a plain page). Until then a show request first performs actionEvent 785 on a combinedAction (raAction 728 + hmiAction to page 10, as if the entry had been chosen; HmiMain3D refuses an actionEvent on a plain hmiAction), then holds from page 10 as usual |
 | Service start | The Android Auto service starts at once, no 15 s delay; no HMI gate (opt-in file `gate-on`) |
 | Menu entry | Leads straight to the picture while a session runs |
 | Early start | The plugin calls `PluginApp::start()` itself when iDrive loads it, so its timers run before the page is first opened |

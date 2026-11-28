@@ -27,6 +27,16 @@
       <raAction id="725"/>
       <!-- the TerminalUI hold state's action (controller events it takes) -->
       <raAction id="726"/>
+      <!-- start at boot (2026-11-28): opens page 10 as if the driver had chosen the entry, through actionEvent 785. With the
+           TerminalUI hold state in this app iDrive takes our focus events only once the app was opened; HmiMain3D's
+           CActionEvent::perform refuses a plain hmiAction ("dynamic HmiActions are no longer allowed") but performs a
+           combinedAction. The raAction only tells the plugin that it ran. -->
+      <combinedAction id="727">
+        <actions>
+          <raAction id="728"/>
+          <hmiAction id="729" target="10"/>
+        </actions>
+      </combinedAction>
       <raAction id="731"/>
       <raAction id="732"/>
       <!-- "Reboot": page 33 asks, its button leads to the inert page 34, whose focus runs nbt_reset -->
@@ -66,6 +76,7 @@
       <raBoolModel id="799"/>
     </models>
     <events>
+      <actionEvent id="785" action="727"/>
       <focusEvent id="52" target="13"/>
       <focusEvent id="54" target="13"/>
       <!-- 200..699: the pool the plugin uses to bring the picture up (car 2026-11-18, HmiMain3D CFocusEvent::perform):

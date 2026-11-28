@@ -89,6 +89,13 @@ const char* const kLeave="/fs/ram3/nbt-aa-leave";
 // false -> changeToNormalView). Set on every focus of state 13. Its raAction (726) is what the state sends for the
 // controller events it takes (onViewEvent / mapKeyCodeToA4AParam): only counted and logged for now.
 const unsigned kTuiFullscreenProperty=13, kTuiAction=726;
+// Start at boot (car 2026-11-28): with the TerminalUI hold state in the app, iDrive ignores every focus event of ours
+// until one of our pages has been opened (boot: 8..10 events to 13 and to the status page 14, none taken; with the hold
+// state a plain hmiState again, taken at once). An actionEvent on a combinedAction is performed (HmiMain3D
+// CActionEvent::perform: only a plain hmiAction is refused), so until a page of ours has had the focus, hold() sends
+// actionEvent 785: combinedAction 727 = raAction 728 (logged) + hmiAction 729 to page 10, as if the driver had chosen the
+// entry. On page 10 the run() poll then sends the hold event as usual.
+const unsigned kEvOpenApp=785, kOpenAppAction=728;
 // In full screen the state also keeps MENU and BACK from iDrive (car 2026-11-28; OPTION, COM, MEDIA, NAV, MAP still
 // reach it). On MENU and a long BACK (a short one goes to the phone), nbt_knob writes kTuiKey; KeyWatch (every 100 ms
 // while the hold state has the focus) then sets the property back to false (changeToNormalView: iDrive gets its keys
@@ -463,7 +470,7 @@ public:
     KeyWatch keyWatch;
     HoldSlot slots[kHoldCount];
     Entry():app(0),stopping(false),polling(false),statusFocused(false),running(false),focusMask(0),visibleMask(0),menuMask(0),
-            shownText(0),shownUse(0),shownListenText(0),shownTitle(0),shownListen(-1),shownListenEnabled(-1),window(0),holds(0),ignoredHolds(0),lastSideHold(0),lastAutoHold(0),lastSideHoldMs(-100000),lastHoldMs(-100000),lastFocusMs(0),lastBoxMs(-100000),showUntilMs(0),showRetryAtMs(0),evIdx(kEvPoolCount-1),evUses(kEvPoolUses),evIgnoredSeen(0) {
+            shownText(0),shownUse(0),shownListenText(0),shownTitle(0),shownListen(-1),shownListenEnabled(-1),window(0),holds(0),ignoredHolds(0),lastSideHold(0),lastAutoHold(0),lastSideHoldMs(-100000),lastHoldMs(-100000),lastFocusMs(0),lastBoxMs(-100000),showUntilMs(0),showRetryAtMs(0),evIdx(kEvPoolCount-1),evUses(kEvPoolUses),evIgnoredSeen(0),opened(false),openPending(false) {
         checker.e=this; verifier.e=this; target.e=this; keyWatch.e=this;
         for(unsigned i=0;i<kHoldCount;++i){slots[i].e=this;slots[i].idx=i;}
         for(int i=0;i<kBoxCount;++i){shownBox[i]=-1;boxSlots[i].e=this;boxSlots[i].i=i;}
@@ -489,6 +496,14 @@ public:
         if(counted&&++holds>10){plog("hold refused by loop guard (10/min)");touch(kHidden);return;}
         // car 2026-11-09: iDrive sometimes ignores 52 for the rest of the drive (entry page shown, picture hidden): after
         // an ignored attempt the next one uses 54 (to hold state 13), then 52 again, ...
+        if(!opened){   // no page of ours had the focus since the HMI start: open the app first (kEvOpenApp)
+            plog(why,(int)holds);
+            plog("  app not opened yet since the HMI start: action event",(int)kEvOpenApp);
+            openPending=true;
+            app->triggerEvent(kEvOpenApp);
+            verify();
+            return;
+        }
         if(ignoredHolds!=evIgnoredSeen){evIgnoredSeen=ignoredHolds;evUses=kEvPoolUses;}   // ignored: next event
         if(evUses>=kEvPoolUses){evIdx=(evIdx+1)%kEvPoolCount;evUses=0;}
         ++evUses;
@@ -539,6 +554,10 @@ public:
         showModels(false);
         long t=now_s();
         if(running&&statusFocused&&!holdFocused()&&t-lastAutoHold>=10){lastAutoHold=t;hold("hold (status page, retry)");}
+        if(openPending&&(menuMask&1)&&!holdFocused()&&now_ms()-lastHoldMs>=1100){   // opened by kEvOpenApp: on to 13
+            openPending=false;
+            if(running)hold("app opened at boot (page 10) -> hold",false);
+        }
         app->post(this,500);
     }
     void startPolling(unsigned delay) { if(!polling&&!stopping){polling=true;app->post(this,delay);} }
@@ -549,6 +568,7 @@ public:
         e->lastFocusMs=now_ms();
         e->target.start();
         plog(what,focused);
+        if(focused)e->opened=true;
         if(focused&&!e->stopping){
             if(bit==1){g_entrySeen=true;unlink(kLeave);if(readStatus(&e->running)==kTxtServiceDown)launchService();}
             e->showModels(true);
@@ -565,6 +585,7 @@ public:
         Entry* e=static_cast<Entry*>(self);
         bool focused=false;p.readBool(focused);
         e->statusFocused=focused;e->lastFocusMs=now_ms();
+        if(focused)e->opened=true;
         e->target.start();
         plog("status page focus",focused);
         if(focused&&!e->stopping){
@@ -604,6 +625,11 @@ public:
         return true;
     }
     // the TerminalUI hold state's action: the controller events iDrive gives the state (see kTuiAction)
+    static bool openAppAction(void* self,const bmw::Parcel&) {   // combinedAction 727 ran (kEvOpenApp)
+        (void)self;
+        plog("app opened by the action event (combined action ran)",0);
+        return true;
+    }
     static bool tuiAction(void* self,const bmw::Parcel&) {
         static int count=0;
         (void)self;
@@ -634,6 +660,8 @@ public:
     // no retry (car 2026-11-18: retrying the retry sent an event every 1.26 s for as long as iDrive ignored them all).
     long long showRetryAtMs;
     unsigned evIdx,evUses,evIgnoredSeen;   // focus event pool (kEvPoolFirst..): current event, its uses, ignoredHolds seen
+    bool opened;                           // one of our pages had the focus since the HMI start (kEvOpenApp)
+    bool openPending;                      // the app was opened by kEvOpenApp for a show: hold on page 10
     void showHold(const char* why,bool retry=true) {
         const long long before=lastHoldMs;
         hold(why,false);
@@ -647,6 +675,7 @@ public:
         plog(focused?"hold focus 1, level":"hold focus 0, level",(int)s->idx);
         e->target.start();
         if(focused){
+            e->opened=true;e->openPending=false;
             unlink(kLeave);if(!g_pdcActive)unlink(kHidden);touch(kRequest);e->ignoredHolds=0;e->startPolling(500);
             static bmw::Parcel* on=new bmw::Parcel(true);
             e->app->setProperty(kHoldState,kTuiFullscreenProperty,*on);
@@ -923,6 +952,8 @@ bmw::IPluginApp* create(bmw::IDispatcher& d,const char* name,const bmw::Bundle& 
     bmw::ActionDelegate onYes={&entry,&Entry::resetYes};
     bmw::ActionDelegate onNo={&entry,&Entry::resetNo};
     app->addHandler(kListenAction,onListen);
+    bmw::ActionDelegate onOpenApp={&entry,&Entry::openAppAction};
+    app->addHandler(kOpenAppAction,onOpenApp);
     bmw::ActionDelegate onTui={&entry,&Entry::tuiAction};
     app->addHandler(kTuiAction,onTui);
     app->addHandler(kResetYes,onYes);
