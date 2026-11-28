@@ -38,8 +38,8 @@
 // marks the list closing. So after the phone button the roller stays with iDrive until it has been still for
 // NBT_LIST_HOLD_S seconds (default 4, the list's own timeout: user 2026-11-17, it closes 4 s after the last turn;
 // every step inside the list restarts the time). 0 = off.
-// Forwarded as Android Auto media keys, also while the Android Auto page is not on screen: up -> NEXT 87,
-// down -> PREVIOUS 88, press -> PLAY_PAUSE 85. Override / switch off with NBT_WHEEL_UP / _DOWN / _PUSH = keycode / 0.
+// Forwarded as Android Auto media keys, also while the Android Auto page is not on screen: up -> PREVIOUS 88,
+// down -> NEXT 87 (swapped, user 2026-11-28), press -> PLAY_PAUSE 85. Override / switch off with NBT_WHEEL_UP / _DOWN / _PUSH = keycode / 0.
 // iDrive still gets the roller too.
 // 2026-11-13 (user): only while the audio source is AUX (the phone's audio); on Bluetooth / radio the roller is left to
 // iDrive alone. Source from the C03 status below (asked for at start); still unknown = treated as AUX.
@@ -205,7 +205,7 @@ unsigned wheelKey(const char* name, unsigned dflt) {
     const char* v = getenv(name);
     return v && *v ? (unsigned)strtoul(v, 0, 10) : dflt;
 }
-unsigned g_wheelUp = 87, g_wheelDown = 88, g_wheelPush = 85;
+unsigned g_wheelUp = 88, g_wheelDown = 87, g_wheelPush = 85;
 bool g_wheelPushDown = false;     // under g_backMx (callback thread and main loop)
 bool g_wheelPushLong = false;     // this press was long (handled), its release does nothing
 long long g_wheelPushDownMs = 0;
@@ -1388,7 +1388,7 @@ int main(int argc, char** argv) {
     static nbt::car::CcsInput ccs;
     if (!ccs.attach(most, nbt::car::readCcsConfig(), &onKnob, NULL)) return 3;
     if (!most.addRoute(0xE5, 0x01, 0xC20, 0xC, &onC20, NULL)) printf("[Knob] no room for the split-screen BACK route\n");
-    g_wheelUp = wheelKey("NBT_WHEEL_UP", 87); g_wheelDown = wheelKey("NBT_WHEEL_DOWN", 88); g_wheelPush = wheelKey("NBT_WHEEL_PUSH", 85);
+    g_wheelUp = wheelKey("NBT_WHEEL_UP", 88); g_wheelDown = wheelKey("NBT_WHEEL_DOWN", 87); g_wheelPush = wheelKey("NBT_WHEEL_PUSH", 85);
     if (!most.addRoute(0x15, 0x02, nbt::most::kAny, 0xC, &onWheel, NULL)) printf("[Knob] no room for the steering wheel route\n");
     g_auxButton = wheelKey("NBT_AUX_FAVORITE", 0);
     g_aaButton = wheelKey("NBT_AA_FAVORITE", 1);        // now only on (show request) / 0 = off

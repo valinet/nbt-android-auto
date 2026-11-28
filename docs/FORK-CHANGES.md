@@ -46,7 +46,7 @@ screen.
 | NAV | Brings Android Auto to the front (`NBT_NAV_OPENS_AA`) |
 | NAV in Android Auto | Android Auto audio: source not AUX → switch to AUX and start playback if the phone is not playing; source AUX → play / pause (`NBT_NAV_AUDIO`) |
 | MENU, COM, MEDIA, OPTION | Hide the picture at once and stay with iDrive |
-| Wheel roller | Up = NEXT, down = PREVIOUS, push = PLAY_PAUSE, only while the source is AUX (`NBT_WHEEL_AUX_ONLY`) |
+| Wheel roller | Up = PREVIOUS, down = NEXT (swapped 2026-11-28), push = PLAY_PAUSE, only while the source is AUX (`NBT_WHEEL_AUX_ONLY`) |
 | Roller at start | The first status after start (`ff`) is ignored; only `80` / `7e` count as steps (fixed a one-time song skip at boot) |
 | Phone button | Roller and push stay with iDrive's contact list until 4 s without a turn (`NBT_LIST_HOLD_S`) |
 
