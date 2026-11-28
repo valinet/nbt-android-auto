@@ -90,7 +90,7 @@ const char* const kLeave="/fs/ram3/nbt-aa-leave";
 // controller events it takes (onViewEvent / mapKeyCodeToA4AParam): only counted and logged for now.
 const unsigned kTuiFullscreenProperty=13, kTuiAction=726;
 // In full screen the state also keeps MENU and BACK from iDrive (car 2026-11-28; OPTION, COM, MEDIA, NAV, MAP still
-// reach it). On a long BACK (a short one goes to the phone), nbt_knob writes kTuiKey; KeyWatch (every 100 ms
+// reach it). On MENU and a long BACK (a short one goes to the phone), nbt_knob writes kTuiKey; KeyWatch (every 100 ms
 // while the hold state has the focus) then sets the property back to false (changeToNormalView: iDrive gets its keys
 // again) and answers with kRekey, on which nbt_knob sends that key to iDrive once more.
 const char* const kTuiKey="/fs/ram3/nbt-aa-tuikey";
@@ -760,7 +760,7 @@ void KeyWatch::run() {
         static bmw::Parcel* off=new bmw::Parcel(false);
         e->app->setProperty(kHoldState,kTuiFullscreenProperty,*off);
         touch(kRekey);
-        plog("TerminalUI: a long BACK, normal view, nbt_knob sends the key again",0);
+        plog("TerminalUI: MENU or a long BACK, normal view, nbt_knob sends the key again",0);
     }
     start();
 }

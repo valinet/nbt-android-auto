@@ -1100,9 +1100,15 @@ void sendNavIfPending(nbt::most::Client& most) {
 //   (car 2026-11-28) and was dropped: still open.
 // For a remembered key nbt_knob writes /fs/ram3/nbt-aa-tuikey; the plugin then puts the page back to normal view and
 // answers with /fs/ram3/nbt-aa-rekey, on which the same key is sent to iDrive (within 3 s), which acts on it as usual.
-uint8_t g_rekeyBit = 0;          // under g_backMx: the hard key's sensor bit (BACK 02)
+uint8_t g_rekeyBit = 0;          // under g_backMx: the hard key's sensor bit (MENU 01, BACK 02)
 const char* g_rekeyName = "";
 long long g_rekeyAt = 0;
+bool g_rekeyReady = false;       // under g_backMx: the plugin answered (normal view), the key can go
+// MENU (2026-11-28, second try): the full screen page keeps it from iDrive too, and iDrive acts on MENU on the press.
+// The first try sent MENU again while the driver still held it, and iDrive did nothing (guess: a second press while
+// its MENU is still down counts for nothing; BACK, which iDrive acts on at the release, worked the same way). So the
+// MENU for iDrive goes only after the driver's MENU is released (or 3 s after the press, if no release comes).
+bool g_menuHeld = false;         // under g_backMx
 unsigned g_backLongMs = 700;
 bool g_backHeld = false;         // under g_backMx: the driver's BACK is down on the Android Auto page, not sent yet
 bool g_backLong = false;         // ... and held long enough: it is iDrive's
@@ -1138,14 +1144,23 @@ void tuiKeysIfNeeded(nbt::most::Client& most) {
         if (FILE* s = fopen("/fs/ram3/nbt-aa-show", "w")) fclose(s);
         printf("[Knob] BACK held %u ms: Android Auto to the front (show request)\n", g_backLongMs);
     } else pthread_mutex_unlock(&g_backMx);
-    if (unlink("/fs/ram3/nbt-aa-rekey") != 0) return;
+    if (unlink("/fs/ram3/nbt-aa-rekey") == 0) {
+        pthread_mutex_lock(&g_backMx);
+        const bool fresh = g_rekeyBit && nowMs() - g_rekeyAt < 3000;
+        if (fresh) g_rekeyReady = true; else g_rekeyBit = 0;
+        pthread_mutex_unlock(&g_backMx);
+        if (!fresh) printf("[Knob] rekey asked, but no key for iDrive in the last 3 s\n");
+    }
     pthread_mutex_lock(&g_backMx);
+    if (!g_rekeyReady || (g_rekeyBit == 0x01 && g_menuHeld && nowMs() - g_rekeyAt < 3000)) {
+        pthread_mutex_unlock(&g_backMx);
+        return;
+    }
     const uint8_t bit = g_rekeyBit;
     const char* const name = g_rekeyName;
-    const bool fresh = bit && nowMs() - g_rekeyAt < 3000;
+    g_rekeyReady = false;
     g_rekeyBit = 0;
     pthread_mutex_unlock(&g_backMx);
-    if (!fresh) { printf("[Knob] rekey asked, but no key for iDrive in the last 3 s\n"); return; }
     sendHmiKey(most, bit, name);
 }
 
@@ -1201,6 +1216,11 @@ void onKnob(const nbt::car::CcsEvent& ev, void*) {
         }
         pthread_mutex_unlock(&g_backMx);
     }
+    if (!ev.keycode && ev.kind == 1 && !ev.down && !strcmp(ev.what, "MENU")) {   // MENU released: iDrive's MENU may go
+        pthread_mutex_lock(&g_backMx);
+        g_menuHeld = false;
+        pthread_mutex_unlock(&g_backMx);
+    }
     // our own NAV (sendHmiKey: the way back after the parking assistant): Android Auto to the front, as before
     if (!ev.keycode && ev.kind == 1 && ev.down && !ev.cancel && !strcmp(ev.what, "NAV") && nowMs() < g_ownNavUntil &&
         sessionRunning()) {
@@ -1217,6 +1237,12 @@ void onKnob(const nbt::car::CcsEvent& ev, void*) {
         // when the state had already lost the focus (car 2026-11-07: MENU without effect after a while)
         fd = open("/fs/ram3/nbt-aa-hidden", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) close(fd);
+        if (!strcmp(ev.what, "MENU")) {   // the full screen page keeps MENU from iDrive: sent again on its release
+            pthread_mutex_lock(&g_backMx);
+            leaveForIdrive(0x01, "MENU");
+            g_menuHeld = true;
+            pthread_mutex_unlock(&g_backMx);
+        }
         printf("[Knob] %s: leave Android Auto (iDrive key)\n", ev.what);
         return;
     }
