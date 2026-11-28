@@ -344,10 +344,12 @@ bool onHeadlights(void*,const bmw::BasicString<unsigned short>& v){cdsLog("contr
 // - "was Android Auto on screen": iDrive took the focus from our page ~0.9 s BEFORE PDCStatus became 1, so the hidden flag
 //   alone said no. Our page losing the focus with the picture shown less than 3 s before counts too.
 // - off with its button: iDrive stays on its inactive parking screen (on other pages it returns) and ignores our focus
-//   events there (log: 5 events, none taken); the driver's NAV there brings Android Auto back. So nbt_knob is asked for
-//   one NAV (/fs/ram3/nbt-aa-hmi-nav), handled like the driver's: show request, and the Checker takes the focus back
-//   from iDrive's navigation.
+//   events there (log: 5 events, none taken; 2026-11-28 also a focus event to iDrive's own Multimedia menu, a
+//   NativeStateID model, and an actionEvent: nothing). Only a key of the controller gets iDrive off it. Until 2026-11-28
+//   nbt_knob sent NAV (iDrive's navigation came up first, user: take that out; BACK does nothing there). Now
+//   (TargetPoll): MENU (/fs/ram3/nbt-aa-hmi-key 01: iDrive's home screen), the hold 900 ms later, once more 1.5 s later.
 bool g_pdcFromAa=false;       // the parking assistant came up over the Android Auto picture
+volatile bool g_pdcBack=false; // the parking assistant went off over Android Auto (TargetPoll: MENU, then the hold)
 bool g_pdcActive=false;       // parking assistant on: never hold, picture hidden
 long long g_pdcOffMs=-100000; // when it last went off over Android Auto
 long long g_aaLeftMs=-100000; // our page last lost the focus with the picture shown
@@ -370,8 +372,8 @@ bool onPdc(void*,const bmw::BasicString<unsigned short>& v){
             g_pdcFromAa=false;
             g_pdcOffMs=now_ms();
             unlink(kLeave);
-            touch("/fs/ram3/nbt-aa-hmi-nav");                // nbt_knob: NAV, as the driver would press it
-            plog("parking assistant off: NAV -> back to Android Auto",0);
+            g_pdcBack=true;                                   // TargetPoll: MENU, then the hold
+            plog("parking assistant off: back to Android Auto",0);
         }
     }
     return true;
@@ -452,7 +454,8 @@ const unsigned kTargetModel=5;
 class TargetPoll : public bmw::Runnable {
 public:
     bmw::PluginApp* app; Entry* e; bool active; int target;
-    TargetPoll():app(0),e(0),active(false),target(kStatusState) {}
+    int pdcStep; long long pdcAtMs;   // after the parking assistant: 1 MENU sent, 2 hold sent (g_pdcBack)
+    TargetPoll():app(0),e(0),active(false),target(kStatusState),pdcStep(0),pdcAtMs(0) {}
     void start() { if(!active&&app){active=true;app->post(this,0);} }
     void run();
 };
@@ -732,6 +735,25 @@ void TargetPoll::run() {
     }
     const int want=running?(int)(kHoldState+kHoldCount-1):(int)kStatusState;
     if(want!=target){app->updateModel(kTargetModel,want);target=want;plog("entry target ->",want);}
+    {   // after the parking assistant (see g_pdcFromAa): MENU, the hold; not on screen 1.5 s later: the hold again
+        const long long now=now_ms();
+        if(g_pdcBack){
+            g_pdcBack=false;
+            if(running&&!e->holdFocused()){
+                int fd=open("/fs/ram3/nbt-aa-hmi-key",O_WRONLY|O_CREAT|O_TRUNC,0644);
+                if(fd>=0){write(fd,"01\n",3);close(fd);}
+                plog("parking assistant off: MENU for iDrive (nbt_knob)",0);
+                pdcStep=1;pdcAtMs=now+900;
+            }
+        }
+        if(pdcStep&&now>=pdcAtMs){
+            if(e->holdFocused()||!running||g_pdcActive){plog("parking assistant off: done, step",pdcStep);pdcStep=0;}
+            else{
+                e->showHold(pdcStep==1?"after MENU -> hold":"after MENU -> hold again",false);
+                pdcStep=pdcStep==1?2:0;pdcAtMs=now+1500;
+            }
+        }
+    }
     {   // iDrive's call screens (see kCall)
         const long long now=now_ms();
         const bool up=access(kCall,F_OK)==0;

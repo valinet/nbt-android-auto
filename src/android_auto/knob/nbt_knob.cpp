@@ -1506,6 +1506,18 @@ int main(int argc, char** argv) {
             pthread_mutex_unlock(&g_backMx);
         }
         if (!trace) sendNavIfPending(most);
+        // any other hard key for the HMI plugin (2026-11-28, after the parking assistant): /fs/ram3/nbt-aa-hmi-key holds
+        // its sensor bit in hex (01 MENU)
+        if (!trace) {
+            char kb[8] = "";
+            if (FILE* kf = fopen("/fs/ram3/nbt-aa-hmi-key", "r")) {
+                if (!fgets(kb, sizeof(kb), kf)) kb[0] = 0;
+                fclose(kf);
+                unlink("/fs/ram3/nbt-aa-hmi-key");
+                const unsigned bit = (unsigned)strtoul(kb, 0, 16) & 0x7F;
+                if (bit) sendHmiKey(most, (uint8_t)bit, bit == 0x02 ? "BACK" : bit == 0x01 ? "MENU" : "key");
+            }
+        }
         favouritesIfNeeded(most);
         playSwitchIfNeeded(most);
         if (!trace) listenIfNeeded(most);
