@@ -43,9 +43,9 @@ screen.
 | --- | --- |
 | Tilts | Go to the phone only: the hold state is iDrive's TerminalUI page in full screen (2026-11-28), which keeps them from iDrive (the earlier tilt right / BACK tricks sent to iDrive are gone) |
 | BACK | Short press: the phone (sent on the release). Held 700 ms (`NBT_BACK_LONG_MS`): iDrive's BACK; the picture hides, the page goes back to normal view and nbt_knob sends BACK to iDrive again |
-| NAV | Brings Android Auto to the front (`NBT_NAV_OPENS_AA`) |
-| NAV in Android Auto | Android Auto audio: source not AUX → switch to AUX and start playback if the phone is not playing; source AUX → play / pause (`NBT_NAV_AUDIO`) |
-| MENU, COM, MEDIA, OPTION | Hide the picture at once and stay with iDrive |
+| BACK held elsewhere | 700 ms: brings Android Auto / CarPlay to the front from any screen ("Hold BACK to show"; iDrive acts on BACK only on the release) |
+| OPTION | Hides the picture; iDrive opens the hold page's option panel ("CarPlay" / "Android Auto") with Settings, which also has "Connect automatically" and "Listen to ..."; BACK there goes back to the picture |
+| MENU, COM, MEDIA, NAV | Hide the picture at once and stay with iDrive (NAV no longer brings Android Auto up, 2026-11-28: iDrive acts on the press, so a long NAV cannot be ours) |
 | Wheel roller | Up = PREVIOUS, down = NEXT (swapped 2026-11-28), push = PLAY_PAUSE, only while the source is AUX (`NBT_WHEEL_AUX_ONLY`) |
 | Roller at start | The first status after start (`ff`) is ignored; only `80` / `7e` count as steps (fixed a one-time song skip at boot) |
 | Phone button | Roller and push stay with iDrive's contact list until 4 s without a turn (`NBT_LIST_HOLD_S`) |
@@ -59,7 +59,7 @@ screen.
 over the Android Auto connection and are written into io-amp input `input_stereo_1` (`aa_media_out`, A2I client,
 48 kHz stereo, media turned down under prompts, acks once played). That input plays as main source **`f6`**, which the
 amplifier builds without a medium; iDrive keeps it, shows a globe with a music note as the source and leaves the steering wheel to us. `f6` is the
-Android Auto source: play or NAV in Android Auto switches to it, leaving it pauses the phone, the rocker goes to the
+Android Auto source: play or "Listen to ..." switches to it, leaving it pauses the phone, the rocker goes to the
 phone only on `f6`. iDrive's AUX stays factory. The file `media-jack` in `/var/opt/hmi/data/rw/NbtAndroidAutoRT` brings
 back the cable setup (no media channel, the Android Auto source is AUX, choosing AUX opens Android Auto). Prompts
 while another source plays (radio, Bluetooth, AUX, none) go into `input_stereo_3` instead, and `nbt_knob` builds
@@ -100,7 +100,6 @@ page losing the focus for 1 s is one of iDrive's call screens; iDrive ignores ou
 | Leaving Android Auto's source | Sends PLAY_PAUSE (85) to the phone if it is playing (`NBT_AUX_PAUSE`); keys 126 / 127 are not used, they dropped the session |
 | Back on it | Sends PLAY_PAUSE again if the pause was ours (`NBT_AUX_RESUME`) |
 | Phone starts playing | Switches to Android Auto's source if it is not active (`NBT_PLAY_AUX`) |
-| NAV in Android Auto | Switches to Android Auto's source and plays, or play / pause on it (`NBT_NAV_AUDIO`) |
 | AUX chosen in iDrive | Cable setup only (`media-jack`): brings Android Auto to the front (`NBT_AUX_OPENS_AA`) |
 
 `NBT_AUX_SOURCE` is Android Auto's source: `f6` by default, `bb` (AUX) with `media-jack`.
@@ -171,14 +170,14 @@ Multimedia -> **CarPlay & Android Auto** always opens the menu (the page titles 
 | Use CarPlay / Use Android Auto | - | - | the picture if a session runs, else the status page, which asks for the phone |
 | Connect automatically | `gate-on` when unticked | ticked | native_service before every connection; nbt_knob (bring the first session of a boot to the front) |
 | Listen to audio (Listen to CarPlay / Android Auto with such a phone) | - (`/fs/ram3/nbt-aa-listen`) | - | nbt_knob: the source to Android Auto's / CarPlay's and play; ticked while that is the source, greyed out without a session |
-| Settings > Display as full screen * | `split800` when unticked | ticked | boot.sh |
-| Settings > Show using NAV button | `nav-off` when unticked | ticked | nbt_knob, every NAV press |
-| Settings > Open widget automatically | `panel-at-start` | unticked | nbt_decoder, every session start |
-| Settings > Use large widget | `decoder.panelsize` = `full` | unticked | nbt_decoder, every second |
+| Settings > Hold BACK to show | `hold-back-off` when unticked | ticked | nbt_knob, every BACK press |
+| Settings > Show info overlay | `panel-at-start` | unticked | nbt_decoder, every session start; the plugin also shows / hides it at once (`/fs/ram3/nbt-aa-panel-off`) |
+| Advanced > Full screen display * | `split800` when unticked | ticked | boot.sh |
 | Advanced > Use software decoder * | `decoder.sw` | unticked | boot.sh |
 | Advanced > Limit frame rate * | `decoder.30fps` (the phone is asked for 30 fps) | unticked | boot.sh |
 | Advanced > Show frame rate | `decoder.showfps` | unticked | nbt_decoder, every second |
 | Advanced > Display volume changes | `decoder.novolume` when unticked | ticked | nbt_decoder, every second |
+| Advanced > Use large info overlay | `decoder.panelsize` = `full` | unticked | nbt_decoder, every second |
 | Advanced > Debug interaction | `decoder.debuginteraction` | unticked | nbt_decoder (every second): the picture stays hidden (session, sound, input go on), to watch what iDrive does on our pages |
 | Advanced > Reboot | - | - | nbt_reset |
 | Settings > Reset | removes all of the above (and the older `anamorph`, `center800`, `classic`, `decoder.hw`, `start-at-boot.off`) | - | - |

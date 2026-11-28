@@ -104,26 +104,31 @@ const unsigned kEntryState=10, kHoldState=13, kEvHold=52, kFocus=1, kVisible=11,
 //   [x] Listen to audio (803 / 791): ticked while the main source is Android Auto's / CarPlay's (nbt_knob's
 //     nbt-aa-source vs nbt-aa-auxsource); a click asks nbt_knob (nbt-aa-listen) for that source and play; greyed out
 //     without a session
-//   Settings (804) -> page 40: [x] Display as full screen * (no split800), [x] Show using NAV button (no nav-off),
-//     [ ] Open widget automatically (panel-at-start), [ ] Use large widget (decoder.panelsize "full"),
-//     Advanced -> page 42: [ ] Use software decoder * (decoder.sw), [ ] Limit frame rate * (decoder.30fps: the phone
+//   Settings (804) -> page 40 (also OPTION in Android Auto / CarPlay -> iDrive's option panel -> Settings):
+//     [x] Connect automatically, [x] Listen to ... (827 / 828: the same actions and models as 802 / 803),
+//     [x] Hold BACK to show (no hold-back-off),
+//     [ ] Show info overlay (panel-at-start; also on / off at once, user 2026-11-28),
+//     Advanced -> page 42: [x] Full screen display * (no split800), [ ] Use software decoder * (decoder.sw), [ ] Limit frame rate * (decoder.30fps: the phone
 //       is asked for 30 fps), [ ] Show frame rate (decoder.showfps, nbt_decoder's overlay), [x] Display volume changes
-//       (no decoder.novolume), [ ] Debug interaction (decoder.debuginteraction: nbt_decoder keeps the picture hidden,
+//       (no decoder.novolume), [ ] Use large info overlay (decoder.panelsize "full"), [ ] Debug interaction (decoder.debuginteraction: nbt_decoder keeps the picture hidden,
 //       so iDrive's behaviour on our pages can be watched; 2026-11-28), Reboot (pages 33 / 34)
 //     Reset values -> page 44: Yes / No; Yes removes every flag below, then both go back to page 40 (focus event)
 // Checkboxes are raActions (PluginApp::addHandler(action, delegate)): the plugin flips the flag file and sets the
-// raBoolModel. Flags are read live by their users (native_service before every connection, nbt_knob on every NAV,
+// raBoolModel. Flags are read live by their users (native_service before every connection, nbt_knob on every BACK,
 // nbt_decoder every second); those marked * (in the text) only apply after a reboot.
 const char* const kPkgDir="/var/opt/hmi/data/rw/NbtAndroidAutoRT/";
 const unsigned kStatusState=14, kSettingsState=40, kAdvancedState=42, kResetState=44;
-const unsigned kUseModel=750, kListenButton=803, kPropEnabled=1;
+const unsigned kUseModel=750, kListenButton=803, kListenButton2=828, kPropEnabled=1;
 const unsigned kEvSettingsFirst=760, kEvSettingsCount=20;   // focus events back to page 40 (each used 10 times)
-enum Flag { kFlagGate, kFlagSplit, kFlagNavOff, kFlagPanelAuto, kFlagLarge, kFlagSw, kFlag30, kFlagFps, kFlagNoVolume,
+// OPTION in Android Auto / CarPlay (user 2026-11-28): the hold state's optionComponents (XML), iDrive's own option
+// panel, titled by model 759, with only Settings (829 -> page 40). Car 2026-11-28: a focus event to page 40 on OPTION
+// was ignored, iDrive's OPTION took the focus.
+enum Flag { kFlagGate, kFlagSplit, kFlagBackOff, kFlagPanelAuto, kFlagLarge, kFlagSw, kFlag30, kFlagFps, kFlagNoVolume,
             kFlagDebug, kFlags };
-const char* const kFlagFile[kFlags]={"gate-on","split800","nav-off","panel-at-start","decoder.panelsize","decoder.sw",
+const char* const kFlagFile[kFlags]={"gate-on","split800","hold-back-off","panel-at-start","decoder.panelsize","decoder.sw",
                                      "decoder.30fps","decoder.showfps","decoder.novolume","decoder.debuginteraction"};
 // the files "Reset values" removes besides kFlagFile (older settings)
-const char* const kOldFlags[]={"anamorph","center800","classic","decoder.hw","start-at-boot.off"};
+const char* const kOldFlags[]={"anamorph","center800","classic","decoder.hw","start-at-boot.off","nav-off"};
 void pkgPath(const char* name,char* out,size_t size) { snprintf(out,size,"%s%s",kPkgDir,name); }
 bool flagSet(Flag f) {
     char path[128];pkgPath(kFlagFile[f],path,sizeof(path));
@@ -144,7 +149,7 @@ void flagWrite(Flag f,bool on) {
 }
 // a checkbox: its action, raBoolModel, flag, and whether ticked means the flag is there (else: absent)
 struct Box { unsigned action,model; Flag flag; bool tickedWhenSet; };
-const Box kBoxes[]={{702,790,kFlagGate,false},{711,792,kFlagSplit,false},{712,793,kFlagNavOff,false},
+const Box kBoxes[]={{702,790,kFlagGate,false},{711,792,kFlagSplit,false},{712,793,kFlagBackOff,false},
                     {713,794,kFlagPanelAuto,true},{714,795,kFlagLarge,true},{721,796,kFlagSw,true},
                     {722,797,kFlag30,true},{723,798,kFlagFps,true},{724,799,kFlagNoVolume,false},
                     {725,789,kFlagDebug,true}};
@@ -246,7 +251,7 @@ class Entry;
 // Now: kHoldCount nested inert states (13 .. 13+N-1, each the parent of the next, focus event 52 targets the deepest).
 // 2026-11-17: one hold state only. 2026-11-28: a TerminalUI page in full screen keeps the controller and BACK from
 // iDrive itself; the re-holds after BACK, tilt left / right and side panels are gone. Hold events now only for show
-// requests (NAV, start at boot, calls, the parking assistant) and "Use ...".
+// requests (a long BACK, start at boot, calls, the parking assistant) and "Use ...".
 const unsigned kHoldCount=1;
 // Decides, shortly after a hold state lost focus, what happened:
 //   another hold state has the focus (BACK climbed a level)         -> nothing
@@ -276,7 +281,7 @@ public:
     void start();
     void run();
 };
-// back to page 40 after "Reset values" (Yes or No): one of kEvSettingsCount focus events, each used 10 times (iDrive
+// back to page 40 after "Reset" (Yes or No): one of kEvSettingsCount focus events, each used 10 times (iDrive
 // performs a focus event at most 11 times per HMI start, see kEvPoolFirst)
 class BackToSettings : public bmw::Runnable {
 public:
@@ -521,6 +526,7 @@ public:
             static bmw::Parcel* yes=new bmw::Parcel(true);
             static bmw::Parcel* no=new bmw::Parcel(false);
             app->setProperty(kListenButton,kPropEnabled,en?*yes:*no);
+            app->setProperty(kListenButton2,kPropEnabled,en?*yes:*no);
             shownListenEnabled=en;
         }
     }
@@ -578,6 +584,10 @@ public:
         if(tm-e->lastBoxMs<300){plog("checkbox ignored: pressed just before",(int)b.action);return true;}
         e->lastBoxMs=tm;
         flagWrite(b.flag,!flagSet(b.flag));
+        if(b.flag==kFlagPanelAuto){   // "Show info overlay": the start of every session and the one running now
+            if(flagSet(b.flag)){unlink("/fs/ram3/nbt-aa-panel-page2");unlink("/fs/ram3/nbt-aa-panel-off");}
+            else touch("/fs/ram3/nbt-aa-panel-off");
+        }
         plog("checkbox, action",(int)b.action);
         plog("  ticked now",flagSet(b.flag)==b.tickedWhenSet?1:0);
         e->showModels(false);

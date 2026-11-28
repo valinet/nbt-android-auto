@@ -489,7 +489,7 @@ static void car_present(const struct picture* p, int repeat)
 }
 
 
-/* ---- trip computer box (2026-11-23; shown per iDrive's "Trip computer" option and long NAV) ----
+/* ---- trip computer box (2026-11-23; shown per "Show info overlay" in iDrive) ----
  * User: instead of iDrive's split screen, a box over Android Auto at x 880, y 100, 380 x 136 with the trip computer (20 px from the right edge, icons before the values).
  * Car 2026-11-23, a stream of its own for the box: (1) in this process it took over Android Auto's window (only its
  * top-left 280 x 100 was left, as the reference decoder's 64x64 stream created first was taken over by the real one);
@@ -524,7 +524,7 @@ static void car_present(const struct picture* p, int repeat)
  *   833 km        52 L        0.7 L/h (stationary) / 6.3 L/100km (moving)
  *   11.5°C    E 80°    O 73°    B 85%
  * White text on a translucent black background. Shown while Android Auto's window is shown full width and
- * /fs/ram3/nbt-aa-panel-off does not exist (long NAV in nbt_knob). */
+ * /fs/ram3/nbt-aa-panel-off does not exist ("Show info overlay" in iDrive). */
 #define PANEL_OFF_FILE "/fs/ram3/nbt-aa-panel-off"
 #define TRIP_KOMBI_FILE "/fs/ram3/nbt-aa-tripkombi"
 #define TRIP_CDS_FILE "/fs/ram3/nbt-aa-trip"
@@ -537,9 +537,9 @@ enum { PANEL_X = 875, PANEL_Y = 96, PANEL_W = 384, PANEL_H = 2 * 8 + 4 * PANEL_L
 /* small box (user 2026-11-23): "Widget size" in iDrive's Android Auto page, decoder.panelsize in RT_DIR (read when
  * the session starts): "full" = the full box; none (the default) or "small" = a third narrower (256 px, the right edge where the full box's
  * is, so x 1003), two pages of a title and four lines ("Trip": start, duration, distance, average consumption, average
- * speed; "Car": range, tank, instantaneous consumption, temperatures, battery), as tall as the full box, long NAV
- * (nbt_knob) cycles page 1, page 2, off (/fs/ram3/nbt-aa-panel-page2 = the second page); "trip" / "car" = the same
- * box with only that page, long NAV on / off. At the end of the title: the short-term average speed while it runs,
+ * speed; "Car": range, tank, instantaneous consumption, temperatures, battery), as tall as the full box,
+ * page 2 while /fs/ram3/nbt-aa-panel-page2 exists (long NAV in nbt_knob cycled them until 2026-11-28); "trip" / "car" =
+ * the same box with only that page. At the end of the title: the short-term average speed while it runs,
  * else (two pages only) two dots for the page (as Android Auto shows pages: top right, same size, the current one
  * white, the other grey). */
 #define PANEL_PAGE2_FILE "/fs/ram3/nbt-aa-panel-page2"
@@ -1104,7 +1104,7 @@ static void sub_mixer(int w, int h, int out_h)
     say("panel: the stream's mixer %p replaced by %p (1 layer, %dx%d)", old, mixer, w, h);
 }
 
-/* the box's size and place from decoder.panelsize (read again every second by panel_policy, so "Use large widget" in
+/* the box's size and place from decoder.panelsize (read again every second by panel_policy, so "Use large info overlay" in
  * iDrive's menu applies at once): "full" = the full box, anything else = small (two pages); the old "trip" / "car"
  * (one page each) are still understood */
 static char g_panel_size[16];
@@ -1625,7 +1625,7 @@ static void settings_poll(long long now)
 
 /* every window policy round (main thread). The box: drawn every second (the short-term average speed integrates
  * there); put into the picture only while Android Auto's window is shown, it hides and shows with that window by
- * itself (it is part of the window's picture); long NAV (/fs/ram3/nbt-aa-panel-off) hides it. The volume popup:
+ * itself (it is part of the window's picture); /fs/ram3/nbt-aa-panel-off ("Show info overlay") hides it. The volume popup:
  * vol_policy. One upload for both. */
 static void panel_policy(void)
 {
@@ -1641,7 +1641,7 @@ static void panel_policy(void)
     }
     const long long now = now_ms();
     const int want = access(PANEL_OFF_FILE, F_OK) != 0;
-    if (g_panel.pages == 2) {   /* another page (long NAV): drawn and uploaded at once */
+    if (g_panel.pages == 2) {   /* another page (page 2 file): drawn and uploaded at once */
         const int page = access(PANEL_PAGE2_FILE, F_OK) == 0 ? 2 : 1;
         if (page != g_panel.page) {
             g_panel.page = page;
@@ -2270,8 +2270,8 @@ static int run(void)
                 say("input: %s: %s", g_opt.input, strerror(errno));
             break;
         }
-        /* the trip computer box at the start of a session (user 2026-11-23): shown only with "Trip computer: on" in
-         * iDrive's Android Auto page (panel-at-start in the package, default off); long NAV still toggles it */
+        /* the trip computer box at the start of a session (user 2026-11-23): shown only with "Show info overlay" in
+         * iDrive's Settings (panel-at-start in the package, default off); ticking it also shows / hides it at once */
         if (!g_opt.bench) {
             unlink(PANEL_PAGE2_FILE);   /* the paged box starts on its first page */
             if (access(RT_DIR "/panel-at-start", F_OK) == 0)

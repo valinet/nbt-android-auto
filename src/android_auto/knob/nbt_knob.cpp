@@ -87,10 +87,10 @@
 // 2026-11-18: with Android Auto sound in the car (aa_media_out) native_service sets NBT_AUX_SOURCE=f6 (main source
 // f6, io-amp input input_stereo_1) and NBT_AUX_OPENS_AA=0: everything above that says AUX then means f6, and iDrive's
 // own AUX stays factory. Without it (file media-jack) the Android Auto source is AUX, as before.
-// NAV while Android Auto is on screen (user 2026-11-18, instead of a long NAV press): the source is not AUX -> switch
-// to AUX and start playback on the phone unless it already plays (or unless our earlier AUX-left pause is about to be
-// undone by the back-to-AUX resume); the source is AUX -> PLAY_PAUSE (85) to the phone. The show request still goes
-// out, because iDrive opens its navigation on NAV. NBT_NAV_AUDIO=0 off.
+// NAV (user 2026-11-28): iDrive's alone, like MENU (it acts on the press, so a long press cannot be ours). The play /
+// pause on NAV in Android Auto (2026-11-18), NAV bringing Android Auto to the front (2026-11-17) and long NAV cycling
+// the info overlay (2026-11-23) are gone: a long BACK brings the picture up ("Hold BACK to show"), "Show info
+// overlay" (Settings, also from OPTION's panel) shows / hides the overlay.
 //
 // usage: nbt_knob --probe                 only dlopen the DSI library and resolve its symbols (no connection)
 //        nbt_knob [--seconds N] [--fifo PATH]   observe and forward (default FIFO /fs/ram3/nbt-aa-native/input.fifo)
@@ -149,7 +149,7 @@ uint8_t g_ccsCounter = 0;              // its last counter
 // iDrive stays on its inactive parking screen and ignores the HMI plugin's focus events there (car log: 5 events, none
 // taken); the driver's NAV there brings Android Auto back (iDrive leaves the screen, our NAV handler sends the show
 // request). The plugin creates /fs/ram3/nbt-aa-hmi-nav; nbt_knob sends one NAV (C20 hard key bit 0x20, as the
-// controller would), which comes back here and is handled exactly like the driver's NAV.
+// controller would), which comes back here: our own NAV is the show request (2026-11-28: the driver's NAV no longer).
 bool g_navKeyPending = false;
 // our own C20 (NAV) comes back here with our own device as its source (car 2026-11-19: 2032): while
 // they can still come back, a C20 does not change the controller's addresses or counter
@@ -863,11 +863,8 @@ void pressFavourite(nbt::most::Client& most, uint16_t src, uint16_t dst, unsigne
 // main thread, every 200 ms until done: the service's public state
 // --- phone starts playing while the source is not AUX: switch the source to AUX (see the header) ---
 bool g_playAux = true;
-bool g_navOpensAa = true;
 int g_prevMedia = -1;           // -1 = not read yet (the first read is only the starting point)
 long long g_mediaNextCheck = 0;
-bool g_navAudio = true;
-bool g_navAudioPending = false;  // NAV pressed while Android Auto was on screen; under g_backMx
 
 void playSwitchIfNeeded(nbt::most::Client& most) {
     if (!g_playAux) return;
@@ -982,47 +979,6 @@ void tripIfNeeded(nbt::most::Client& most) {
     if (ok) rename("/fs/ram3/nbt-aa-tripkombi.new", kTripKombi);
 }
 
-// --- long NAV in Android Auto: the trip computer box on / off (user 2026-11-23) ---
-// NAV's audio action (navAudioIfNeeded) now comes with the release of a short press; held for NBT_NAV_LONG_MS (default
-// 700) it toggles /fs/ram3/nbt-aa-panel-off instead (nbt_decoder hides the box while it exists; RAM: on after a boot).
-// The show request still goes out on the press.
-bool g_navHeld = false;          // NAV down in Android Auto, not yet released / not yet long; under g_backMx
-bool g_navHeldAudio = false;     // its release is the audio action
-long long g_navDownMs = 0;
-int g_navLongMs = 700;
-
-void navLongIfNeeded() {
-    pthread_mutex_lock(&g_backMx);
-    const bool go = g_navHeld && nowMs() - g_navDownMs >= g_navLongMs;
-    if (go) g_navHeld = false;                                  // its release does nothing now
-    pthread_mutex_unlock(&g_backMx);
-    if (!go) return;
-    const char* const off = "/fs/ram3/nbt-aa-panel-off";
-    // "Widget size: Small" (user 2026-11-23, the default: decoder.panelsize missing or "small"): page 1, page 2, off;
-    // /fs/ram3/nbt-aa-panel-page2 = page 2. The other sizes ("full", "trip", "car"): on / off.
-    const char* const page2 = "/fs/ram3/nbt-aa-panel-page2";
-    bool paged = true;
-    if (FILE* f = fopen("/var/opt/hmi/data/rw/NbtAndroidAutoRT/decoder.panelsize", "r")) {
-        char size[16] = "";
-        if (fgets(size, sizeof(size), f))
-            paged = !strncmp(size, "small", 5);
-        fclose(f);
-    }
-    if (access(off, F_OK) == 0) {
-        unlink(page2);                                          // back on, on the first page
-        unlink(off);
-        printf("[Knob] long NAV: trip computer box on\n");
-    } else if (paged && access(page2, F_OK) != 0) {
-        const int fd = open(page2, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd >= 0) close(fd);
-        printf("[Knob] long NAV: trip computer box, page 2\n");
-    } else {
-        const int fd = open(off, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd >= 0) close(fd);
-        printf("[Knob] long NAV: trip computer box off\n");
-    }
-}
-
 // "Listen to audio" in the menu (HMI plugin, 2026-11-27): /fs/ram3/nbt-aa-listen -> the source to Android Auto's /
 // CarPlay's and the phone's music playing (no pause: unlike NAV, the item only ever starts it). The plugin ticks the
 // item from kSourceFile and kAuxSourceFile.
@@ -1043,27 +999,6 @@ void listenIfNeeded(nbt::most::Client& most) {
     } else if (st == 2) return;                                    // on it and playing: nothing to do
     wheelKeyLine(85, 1, "LISTEN_PLAY");
     wheelKeyLine(85, 0, "LISTEN_PLAY");
-}
-
-// main thread: NAV pressed while Android Auto was on screen -> Android Auto audio / play-pause (see the header)
-void navAudioIfNeeded(nbt::most::Client& most) {
-    pthread_mutex_lock(&g_backMx);
-    const bool go = g_navAudioPending;
-    g_navAudioPending = false;
-    pthread_mutex_unlock(&g_backMx);
-    if (!go || !sessionRunning()) return;
-    const int st = mediaState();
-    const bool onAux = g_lastSource == (int)g_auxSource;
-    printf("[Knob] NAV in Android Auto: source %02X, phone media state %d\n", g_lastSource < 0 ? 0xFF : g_lastSource, st);
-    if (!onAux) {
-        requestSource(most, g_auxSource);
-        if (st == 2) return;                                       // already playing
-        if (g_wePaused && g_auxResume) return;                     // the back-to-AUX resume (onSource) starts it
-        g_prevMedia = 2;                                           // our own play: no second switch request
-        g_mediaNextCheck = nowMs() + 3000;
-    }
-    wheelKeyLine(85, 1, "NAV_PLAY_PAUSE");
-    wheelKeyLine(85, 0, "NAV_PLAY_PAUSE");
 }
 
 void favouritesIfNeeded(nbt::most::Client& most) {
@@ -1158,6 +1093,12 @@ unsigned g_backLongMs = 700;
 bool g_backHeld = false;         // under g_backMx: the driver's BACK is down on the Android Auto page, not sent yet
 bool g_backLong = false;         // ... and held long enough: it is iDrive's
 long long g_backDownMs = 0;
+// "Hold BACK to show" (user 2026-11-28; unticked: hold-back-off in the package, looked at on every press): BACK held
+// NBT_BACK_LONG_MS while the picture is not on screen brings Android Auto / CarPlay to the front (show request). iDrive
+// acts on BACK only on the release, so the long press is seen first; by then the full screen hold page has the
+// controller.
+bool g_backOutHeld = false;      // under g_backMx: BACK down with the picture not on screen
+long long g_backOutDownMs = 0;
 
 void leaveForIdrive(uint8_t bit, const char* name) {   // with g_backMx held
     g_rekeyBit = bit; g_rekeyName = name; g_rekeyAt = nowMs();
@@ -1177,6 +1118,11 @@ void tuiKeysIfNeeded(nbt::most::Client& most) {
         leaveForIdrive(0x02, "BACK");
         pthread_mutex_unlock(&g_backMx);
         printf("[Knob] BACK held %u ms: for iDrive, leave Android Auto\n", g_backLongMs);
+    } else if (g_backOutHeld && nowMs() - g_backOutDownMs >= (long long)g_backLongMs) {
+        g_backOutHeld = false;
+        pthread_mutex_unlock(&g_backMx);
+        if (FILE* s = fopen("/fs/ram3/nbt-aa-show", "w")) fclose(s);
+        printf("[Knob] BACK held %u ms: Android Auto to the front (show request)\n", g_backLongMs);
     } else pthread_mutex_unlock(&g_backMx);
     if (unlink("/fs/ram3/nbt-aa-rekey") != 0) return;
     pthread_mutex_lock(&g_backMx);
@@ -1217,9 +1163,15 @@ void onKnob(const nbt::car::CcsEvent& ev, void*) {
     char line[48];
     int n;
     // BACK on the Android Auto page: short -> the phone (on the release), long -> iDrive (tuiKeysIfNeeded)
+    // BACK elsewhere: iDrive's; held long -> Android Auto to the front ("Hold BACK to show", tuiKeysIfNeeded)
     if (ev.keycode == nbt::AAK_BACK && ev.kind == 1) {
+        const bool hidden = access("/fs/ram3/nbt-aa-hidden", F_OK) == 0;
+        const bool mayShow = ev.down && !ev.cancel && hidden && nowMs() >= g_ownC20Until && sessionRunning() &&
+                             access("/var/opt/hmi/data/rw/NbtAndroidAutoRT/hold-back-off", F_OK) != 0;
         pthread_mutex_lock(&g_backMx);
-        if (ev.down && !ev.cancel && access("/fs/ram3/nbt-aa-hidden", F_OK) != 0) {
+        if (mayShow) { g_backOutHeld = true; g_backOutDownMs = nowMs(); }
+        else if (!ev.down) g_backOutHeld = false;
+        if (ev.down && !ev.cancel && !hidden) {
             g_backHeld = true; g_backLong = false; g_backDownMs = nowMs();
             pthread_mutex_unlock(&g_backMx);
             return;
@@ -1235,30 +1187,11 @@ void onKnob(const nbt::car::CcsEvent& ev, void*) {
         }
         pthread_mutex_unlock(&g_backMx);
     }
-    // NAV opens Android Auto (user 2026-11-17): iDrive still gets the key and opens its navigation, the show request
-    // (HMI plugin, checked every 250 ms) brings Android Auto back over it. NBT_NAV_OPENS_AA=0: NAV stays with iDrive.
-    // "Show using NAV button" unticked in the menu (2026-11-27): nav-off in the package, looked at on every press
-    if (!ev.keycode && ev.kind == 1 && ev.down && !ev.cancel && g_navOpensAa && !strcmp(ev.what, "NAV") && sessionRunning() &&
-        access("/var/opt/hmi/data/rw/NbtAndroidAutoRT/nav-off", F_OK) != 0) {
-        const bool own = nowMs() < g_ownNavUntil;
-        if (own) printf("[Knob] NAV: our own (HMI plugin), no audio action\n");
-        else if (aaActive()) {               // already in Android Auto: short = its audio (on release), long = the box
-            pthread_mutex_lock(&g_backMx);
-            g_navHeld = true;
-            g_navHeldAudio = g_navAudio;
-            g_navDownMs = nowMs();
-            pthread_mutex_unlock(&g_backMx);
-        }
+    // our own NAV (sendHmiKey: the way back after the parking assistant): Android Auto to the front, as before
+    if (!ev.keycode && ev.kind == 1 && ev.down && !ev.cancel && !strcmp(ev.what, "NAV") && nowMs() < g_ownNavUntil &&
+        sessionRunning()) {
         if (FILE* s = fopen("/fs/ram3/nbt-aa-show", "w")) fclose(s);
-        printf("[Knob] NAV: Android Auto to the front (show request)\n");
-        return;
-    }
-    // NAV released after a short press in Android Auto: its audio action (main thread)
-    if (!ev.keycode && ev.kind == 1 && !ev.down && !strcmp(ev.what, "NAV")) {
-        pthread_mutex_lock(&g_backMx);
-        if (g_navHeld && !ev.cancel && g_navHeldAudio) g_navAudioPending = true;
-        g_navHeld = false;
-        pthread_mutex_unlock(&g_backMx);
+        printf("[Knob] NAV: our own (HMI plugin): Android Auto to the front (show request)\n");
         return;
     }
     // a hard key that stays with iDrive (MENU, OPTION, COM, MEDIA, NAV, MAP: keycode 0) while Android Auto is on
@@ -1396,9 +1329,6 @@ int main(int argc, char** argv) {
     if (trace) g_aaButton = 0;
     g_playAux = wheelKey("NBT_PLAY_AUX", 1) != 0 && !trace;
     g_auxOpensAa = wheelKey("NBT_AUX_OPENS_AA", 1) != 0 && !trace;
-    g_navOpensAa = wheelKey("NBT_NAV_OPENS_AA", 1) != 0 && !trace;
-    g_navAudio = wheelKey("NBT_NAV_AUDIO", 1) != 0 && !trace;
-    g_navLongMs = wheelKey("NBT_NAV_LONG_MS", 700);
     g_pushLongMs = wheelKey("NBT_PUSH_LONG_MS", 700);
     g_trip = wheelKey("NBT_TRIP", 1) != 0 && !trace;
     if (g_trip && !most.addRoute(0xE0, 0x00, nbt::most::kAny, 0xC, &onTripStatus, NULL))
@@ -1488,10 +1418,9 @@ int main(int argc, char** argv) {
         if (!trace) sendNavIfPending(most);
         favouritesIfNeeded(most);
         playSwitchIfNeeded(most);
-        navAudioIfNeeded(most);
         if (!trace) listenIfNeeded(most);
         if (!trace) tuiKeysIfNeeded(most);
-        if (!trace) { navLongIfNeeded(); wheelLongIfNeeded(); tripIfNeeded(most); }
+        if (!trace) { wheelLongIfNeeded(); tripIfNeeded(most); }
         if (!trace) promptRouteIfNeeded(most);
         if (!trace) btAudioIfNeeded(most);
         voiceIfNeeded();

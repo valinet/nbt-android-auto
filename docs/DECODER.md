@@ -28,11 +28,11 @@ Used whenever `nbt_decoder` is installed, at 60 fps; no file is needed. Optional
 | `decoder.panelflip` | The box's bitmap: 1 rows reversed, 2 columns reversed, 3 both (default 0) |
 | `decoder.novolume` | No volume popup over the picture ("Display volume changes" unticked in Advanced; read every second) |
 | `decoder.showfps` | Frame rate overlay in the top left corner: pictures shown in the last second, updated every second, white on opaque black ("Show frame rate" in Advanced; read every second; nothing drawn or uploaded while off; full width only, like the box) |
-| `decoder.panelsize` | The box's size, set by "Widget size" in iDrive's Android Auto page: `full` = full width (384 px); none (the default) or `small` = 256 px (same right edge, x 1003) with two pages, long NAV cycles page 1, page 2, off; `trip` / `car` = 256 px with only that page, long NAV on / off. "Use large widget" in iDrive's Settings writes `full` or removes it; read every second, the box changes size at once |
+| `decoder.panelsize` | The box's size, set by "Widget size" in iDrive's Android Auto page: `full` = full width (384 px); none (the default) or `small` = 256 px (same right edge, x 1003) with two pages, page 2 with `/fs/ram3/nbt-aa-panel-page2`; `trip` / `car` = 256 px with only that page. "Use large info overlay" in iDrive's Advanced settings writes `full` or removes it; read every second, the box changes size at once |
 | `decoder.args` | One line of extra arguments for `nbt_decoder` |
 | `decoder.bgvideo` | Keep decoding while the Android Auto / CarPlay page is not on screen. Default (since 2026-11-25): nothing is decoded then; Android Auto gets video focus NATIVE and pauses its video, `nbt_carplay` drops the iPhone's frames; back on the page both send a fresh key frame |
 | `decoder.delay` | Seconds after iDrive's `MARKER HMIReady` before the first session at boot (default 2) |
-| `decoder.showdelay` | Seconds of uptime before Android Auto is brought to the front (start at boot, NAV, AUX; default 40) |
+| `decoder.showdelay` | Seconds of uptime before Android Auto is brought to the front (start at boot, long BACK, AUX; default 40) |
 | `decoder.timeout` | `NV_NMSDK_TASK_TIMEOUT_MS` for the video calls (default 3000) |
 | `decoder.repeat` | Milliseconds without a new picture before the last one is handed to the car again (default 50, `0` = never) |
 
@@ -259,23 +259,22 @@ A box at x 875, y 96, 384x167 with a "Trip computer" title line (20 px from the 
 - Long roller push (700 ms, `NBT_PUSH_LONG_MS`, `nbt_knob`): short-term average speed on / off. On, it averages the
   current speed (CDS `driving.speedActual`) from that moment and shows it at the end of the title line; a short push
   is still play / pause (now on the release).
-- At the start of each session the box is hidden unless "Open widget automatically" is ticked in iDrive's Settings
-  (flag file `panel-at-start` in the package; default off). Long NAV still
-  shows / hides it during the session. There is no other switch: in full width the box's process always runs; while
+- At the start of each session the box is hidden unless "Show info overlay" is ticked in iDrive's Settings
+  (flag file `panel-at-start` in the package; default off; ticking or unticking it also shows / hides the box at
+  once). There is no other switch: in full width the box's process always runs; while
   the box is hidden it only draws (the short-term average speed keeps counting) and sends nothing to the window
   server.
-- Long NAV (700 ms, `NBT_NAV_LONG_MS`) in Android Auto toggles `/fs/ram3/nbt-aa-panel-off` (box hidden while it
-  exists; on again after a boot). NAV's play / pause now comes with the release of a short press.
+- `/fs/ram3/nbt-aa-panel-off`: box hidden while it exists ("Show info overlay"; until 2026-11-28 long NAV toggled it).
 - Small box ("Widget size" in iDrive's Android Auto page, full width only, `decoder.panelsize`; user 2026-11-23):
   Full width / Small / Trip only / Car only, each press takes the next; Small is the default. The full box is 384 px wide and its lines need it (up to 365 px
   of text at 22 px), which brings it close to Waze's controls in full width. The paged one is 256 px wide with at most
   two values per line: page "Trip" = start and duration, distance, average consumption, average speed; page "Car" =
   range and tank, instantaneous consumption, outside temperature and battery, coolant and oil. The short-term average
   speed is at the end of the title on both pages while it runs; otherwise two dots there show the page, as Android
-  Auto shows pages (same size, the current one white, the other grey). As tall as the full box. Small: long NAV goes
-  page 1, page 2 (`/fs/ram3/nbt-aa-panel-page2`), off, page 1 again; each session starts on page 1; a page change is
-  drawn and uploaded at once (not waiting for the once-a-second update). Trip only / Car only: one page, no dots, long
-  NAV shows / hides it.
+  Auto shows pages (same size, the current one white, the other grey). As tall as the full box. Small: page 2 while
+  `/fs/ram3/nbt-aa-panel-page2` exists (until 2026-11-28 long NAV went page 1, page 2, off; nothing sets it now); each
+  session starts on page 1; a page change is drawn and uploaded at once (not waiting for the once-a-second update).
+  Trip only / Car only: one page, no dots.
 
 ## Volume popup
 

@@ -611,20 +611,23 @@
       <!-- * = applies after a reboot -->
       <hmiState id="40" parentId="10" textModel="751" text="Settings">
         <components>
-          <checkbox id="821" action="711" model="792" text="Display as full screen *"/>
-          <checkbox id="822" action="712" model="793" text="Show using NAV button"/>
-          <checkbox id="823" action="713" model="794" text="Open widget automatically"/>
-          <checkbox id="824" action="714" model="795" text="Use large widget"/>
-          <button id="825" action="715" model="752" text="Advanced"/>
+          <!-- the first two as on page 10, for OPTION in Android Auto / CarPlay (same actions and models) -->
+          <checkbox id="827" action="702" model="790" text="Connect automatically"/>
+          <checkbox id="828" action="703" model="791" textModel="757" text="Listen to audio"/>
+          <checkbox id="822" action="712" model="793" text="Hold BACK to show"/>
+          <checkbox id="823" action="713" model="794" text="Show info overlay"/>
           <button id="826" action="716" model="753" text="Reset"/>
+          <button id="825" action="715" model="752" text="Advanced"/>
         </components>
       </hmiState>
       <hmiState id="42" parentId="40" textModel="752" text="Advanced">
         <components>
+          <checkbox id="821" action="711" model="792" text="Full screen display *"/>
           <checkbox id="831" action="721" model="796" text="Use software decoder *"/>
           <checkbox id="832" action="722" model="797" text="Limit frame rate *"/>
           <checkbox id="833" action="723" model="798" text="Show frame rate"/>
           <checkbox id="834" action="724" model="799" text="Display volume changes"/>
+          <checkbox id="824" action="714" model="795" text="Use large info overlay"/>
           <!-- the picture stays hidden (nbt_decoder), to watch what iDrive does on our pages -->
           <checkbox id="835" action="725" model="789" text="Debug interaction"/>
           <button id="86" action="80" model="82" text="Reboot"/>
@@ -654,10 +657,16 @@
            sets its TERMINALUI_FULLSCREEN property 13): nothing selectable, so controller turns / pushes / tilts do
            nothing in iDrive (nbt_knob's guards keep iDrive's focus here). focusEvent 52 / 54 and the pool lead here. -->
       <!-- only the attributes the stock state has (action, id): an unknown one might make iDrive reject the file -->
-      <terminalUI action="726" id="13">
+      <!-- textModel 759: the title of iDrive's option panel (CarPlay / Android Auto; without it the panel said "CD/DVD") -->
+      <terminalUI action="726" id="13" textModel="759">
         <components>
           <label id="41" model="4" text="Connect phone via USB"/>
         </components>
+        <!-- OPTION in Android Auto / CarPlay (user 2026-11-28): iDrive's option panel of this state (as hmiStates'
+             optionComponents in BMW's RHMI layouts), only Settings: page 40, BACK there goes back to the picture -->
+        <optionComponents>
+          <button id="829" action="704" model="751" text="Settings"/>
+        </optionComponents>
       </terminalUI>
     </hmiStates>
   </pluginApp>
