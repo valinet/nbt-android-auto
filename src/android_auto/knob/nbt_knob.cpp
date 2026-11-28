@@ -71,7 +71,7 @@
 // the key the steering wheel push has sent without trouble. Drawback: 85 toggles, so music that was already paused when
 // AUX was left starts (unheard, the source is not AUX) and is paused again on the way back. So the key goes out only
 // while the phone reports "playing": the session writes the phone's media state to /fs/ram3/nbt-aa-media (2 = playing,
-// 3 = paused, car 2026-11-13; patches/nbt-aad-aa_session-media-state.patch); no file = unknown = as before.
+// 3 = paused, car 2026-11-13; written by aa_video_capture.cpp); no file = unknown = as before.
 // Current source at start (car 2026-11-17, nbt_key source): a Get of 03/00 C03 is refused (Error 05), but a
 // notification registration with 100E (03/00 fkt 001 Set {01, our device id, 0C 03}) is answered at once with the
 // current C03 status, and later switches come to us as well. nbt_knob registers whenever its MOST link comes up and

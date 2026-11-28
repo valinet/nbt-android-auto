@@ -339,6 +339,21 @@ void nav_status(uint16_t id, const uint8_t* b, size_t len, void*)
     nav_write();
 }
 
+void media_status(uint16_t id, const uint8_t* b, size_t len, void*)
+{
+    if (id != 0x8001 || !b || !len)
+        return;
+    long long state;
+    static unsigned last_state = 0xffffffffu;
+    if (pb_int(b, len, 1, &state) && (unsigned)state != last_state) {
+        last_state = (unsigned)state;
+        if (FILE* f = fopen("/fs/ram3/nbt-aa-media", "w")) {
+            fprintf(f, "%u\n", last_state);
+            fclose(f);
+        }
+    }
+}
+
 } // namespace
 
 namespace {
@@ -543,9 +558,10 @@ void save(Capture* c, const uint8_t* p, size_t n, uint64_t pts, bool config)
 }
 
 // AASession video frame callback
-void video(uint32_t, const uint8_t* p, size_t n, uint64_t pts, void* v)
+void video(uint32_t, std::vector<uint8_t>& frame, size_t offset, size_t len, uint64_t pts, void* v)
 {
-    save((Capture*)v, p, n, pts, false);
+    if (offset <= frame.size() && len <= frame.size() - offset)
+        save((Capture*)v, len ? &frame[offset] : 0, len, pts, false);
 }
 
 // Android Auto sound into the car (2026-11-18, aa_media_out.hpp): the service sets NBT_AA_MEDIA_OUT to the io-amp input
@@ -828,6 +844,7 @@ extern "C" int nbt_video_capture_run(nbt_capture_transfer transfer, void* contex
         c.vacks = !(va && !strcmp(va, "0"));
         session.setDeferredVideoAcks(c.vacks);
         session.setNavStatusCallback(nav_status, 0);
+        session.setMediaStatusCallback(media_status, 0);
         unlink("/fs/ram3/nbt-aa-native/nav.state");
         g_refocus_at = 0;
         session.setVideoFocusCallback(focus_request, 0);
@@ -918,7 +935,7 @@ extern "C" int nbt_video_capture_run(nbt_capture_transfer transfer, void* contex
         pthread_mutex_unlock(&c.mutex);
         const bool want_stop = live_stop || (!c.live && now_ms() - start >= seconds * 1000LL) || finished;
         if (want_stop && !bye_until) {
-            session.postByeBye();
+            session.byeAndWait(0);
             bye_until = now_ms() + 1000;
             printf("AA_BYEBYE requested\n");
         }

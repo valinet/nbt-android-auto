@@ -106,8 +106,8 @@ page losing the focus for 1 s is one of iDrive's call screens; iDrive ignores ou
 
 `NBT_AUX_SOURCE` is Android Auto's source: `f6` by default, `bb` (AUX) with `media-jack`.
 
-The phone's playing / paused state comes from the session: a small NBT-AAD core patch
-(`patches/nbt-aad-aa_session-media-state.patch`) writes it to `/fs/ram3/nbt-aa-media` (2 = playing, 3 = paused).
+The phone's playing / paused state comes from the session's media status callback, which writes it to
+`/fs/ram3/nbt-aa-media` (2 = playing, 3 = paused).
 
 ## Connection, USB, service and decoder
 
@@ -145,7 +145,7 @@ The phone's playing / paused state comes from the session: a small NBT-AAD core 
   and shows it through the car's own video library in iDrive's EARLYVIDEO window, instead of fifo_http + Cinemo +
   nbt_hwvideo (Cinemo needs ~45 % CPU for ~28 fps; with the USB sound it fell behind and the picture lagged). Used
   whenever `nbt_decoder` is installed; `decoder.off` = the old path. Full width, or with `split800` 1:1 in an 800x480
-  window. 60 fps by default: asked from the phone (`NBT_VID_FPS`, core patch `nbt-aad-sdr_builder-video-fps.patch`)
+  window. 60 fps by default: asked from the phone (`NBT_VID_FPS`)
   and set for the car's stream; `decoder.30fps` = 30. Car: ~7 ms decode, ~13 ms upload per picture. Details, settings, the car's video interface and the FFmpeg build:
   [DECODER.md](DECODER.md).
 

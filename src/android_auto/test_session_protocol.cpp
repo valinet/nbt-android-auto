@@ -21,6 +21,7 @@ static bool read_exact(int fd, uint8_t* p, size_t size) {
         require(ready > 0, "bounded peer read (not receiver idle timeout)");
         ssize_t n = read(fd, p, size);
         if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && errno == ECONNRESET) return false;
         if (n == 0) return false;
         require(n > 0, "peer socket read");
         p += n; size -= n;

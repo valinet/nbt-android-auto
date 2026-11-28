@@ -1,12 +1,12 @@
-NBT-AAD patch: video flow control (deferred video acks, AASession::setDeferredVideoAcks / postVideoConsumed).
-Upstream: https://github.com/Sq00ky/Supra-iDrive6-Android-Auto commit 41975f2 (PolyForm Noncommercial 1.0.0).
-Apply inside the upstream checkout after the overlay and nbt-aad-aa_session-media-state.patch: git apply <this file>
+NBT-AAD patch: deferred video acknowledgements for decoder flow control.
+Upstream: https://github.com/Sq00ky/Supra-iDrive6-Android-Auto commit 4328560 (PolyForm Noncommercial 1.0.0).
+Apply after scripts/aa_session_overlay.py.
 
 diff --git a/milestone-7/src/aa_session.cpp b/milestone-7/src/aa_session.cpp
-index b002717..c22067e 100644
+index 2576d0e..50e366b 100644
 --- a/milestone-7/src/aa_session.cpp
 +++ b/milestone-7/src/aa_session.cpp
-@@ -50,6 +50,17 @@ AASession::AASession()
+@@ -66,6 +66,17 @@ AASession::AASession()
      pthread_mutex_init(&lifecycle_mutex_, NULL);
      pthread_mutex_init(&fd_mutex_, NULL);
      pthread_mutex_init(&touch_mutex_, NULL);
@@ -24,7 +24,7 @@ index b002717..c22067e 100644
      input_ready_ = false;
      memset(av_session_, 0, sizeof(av_session_));
      pending_focus_ = 0;
-@@ -83,6 +94,7 @@ AASession::~AASession() {
+@@ -125,6 +136,7 @@ AASession::~AASession() {
      stop();
      pthread_mutex_destroy(&fd_mutex_);
      pthread_mutex_destroy(&touch_mutex_);
@@ -32,7 +32,7 @@ index b002717..c22067e 100644
      if (wake_pipe_[0] >= 0) close(wake_pipe_[0]);
      if (wake_pipe_[1] >= 0) close(wake_pipe_[1]);
      pthread_mutex_destroy(&lifecycle_mutex_);
-@@ -236,6 +248,67 @@ bool AASession::sendAckThunk(uint8_t channel, uint64_t rx_wall_ns, void* self) {
+@@ -348,6 +360,67 @@ bool AASession::sendAckThunk(uint8_t channel, uint64_t rx_wall_ns, void* self) {
  
  void AASession::drainAcks() {
      acks_.drain(&sendAckThunk, this);
@@ -100,7 +100,7 @@ index b002717..c22067e 100644
  }
  
  void AASession::setUnderflowReports(bool on) { acks_.setUnderflowReports(on); }
-@@ -344,6 +417,15 @@ bool AASession::start(int client_fd) {
+@@ -473,6 +546,15 @@ bool AASession::start(int client_fd) {
      for (int c = 0; c < 32; ++c) offered_audio_[c].clear();   // filled again when this session sends its SDR
      audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
      acks_.startSession();
@@ -116,20 +116,18 @@ index b002717..c22067e 100644
      setRunning(true);
  
      if (pthread_create(&thread_, NULL, &AASession::sessionThreadStub, this) != 0) {
-@@ -466,7 +548,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
-                 if (wake_pipe_[0] > maxfd) maxfd = wake_pipe_[0];
-             }
-             // 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time.
--            const uint32_t tick_ms = acks_.hasPending() ? 250u : 1000u;
-+            const uint32_t tick_ms = (acks_.hasPending() || videoAcksPending()) ? 250u : 1000u;
-             struct timeval tv;
-             tv.tv_sec = tick_ms / 1000u;
-             tv.tv_usec = (tick_ms % 1000u) * 1000u;
-@@ -1302,7 +1384,15 @@ void AASession::sessionLoop() {
-                         // VideoManager owns the hardware decoder feed and performs any
-                         // in-band SPS/PPS prepend next to the mdev Message 3 send. Keep
-                         // AASession limited to protocol parsing and fixed-offset slicing.
-+                        // Video flow control: counted before the consumer can report it (see setDeferredVideoAcks)
+@@ -1157,7 +1239,7 @@ static uint32_t msLeft(uint32_t last_ms, uint32_t every_ms, uint32_t now) {
+ // sensor event: a phone frame just before one is due would otherwise put it off by a whole tick, and at 1 s ticks a quiet
+ // phone would stretch a compass repeat to 2 s. A 0 here cannot spin, because sendSensorEvent stamps the time before it sends.
+ uint32_t AASession::periodicTickMs() {
+-    uint32_t tick = acks_.hasPending() ? 250u : 1000u;
++    uint32_t tick = (acks_.hasPending() || videoAcksPending()) ? 250u : 1000u;
+     const uint32_t now = monoMs();
+     if (satellites_started_) {
+         const uint32_t left = msLeft(satellites_last_ms_, kSatelliteSendEveryMs, now);
+@@ -1614,6 +1696,13 @@ void AASession::sessionLoop() {
+                         // in the mdev Message 3 iov. Transfer the decrypted message buffer so the access unit is not
+                         // copied just to move it across the callback boundary.
                          if (video_cb_) {
 +                            pthread_mutex_lock(&vack_mutex_);
 +                            if (vack_session_) {
@@ -139,13 +137,13 @@ index b002717..c22067e 100644
 +                            }
 +                            pthread_mutex_unlock(&vack_mutex_);
                              g_crumb_stage = 4;
-                             video_cb_(media_frames_, nal_ptr, nal_len, pts, video_user_data_);
+                             video_cb_(media_frames_, frame_data, offset, nal_len, pts, video_user_data_);
                              g_crumb_stage = 3;
 diff --git a/milestone-7/src/aa_session.hpp b/milestone-7/src/aa_session.hpp
-index e4dab93..d6e4550 100644
+index 156b352..22fe8ac 100644
 --- a/milestone-7/src/aa_session.hpp
 +++ b/milestone-7/src/aa_session.hpp
-@@ -86,6 +86,16 @@ public:
+@@ -117,6 +117,16 @@ public:
      void setUnderflowReports(bool on);
      void postAudioUnderflow(uint8_t channel);
  
@@ -162,7 +160,7 @@ index e4dab93..d6e4550 100644
  private:
      static void* sessionThreadStub(void* arg);
      void sessionLoop();
-@@ -168,6 +178,18 @@ private:
+@@ -250,6 +260,18 @@ private:
      // session thread records frames into it and sends what it releases.
      AudioAcks acks_;
      void drainAcks();                // session thread: send the acks acks_ releases

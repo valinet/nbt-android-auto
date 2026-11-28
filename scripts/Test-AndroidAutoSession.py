@@ -11,12 +11,13 @@ from pathlib import Path
 import re
 import subprocess
 import tarfile
+import tempfile
 import time
 import uuid
-from aa_session_overlay import harden_session
+from build_all import Archive, add_nbt_aad
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "41975f269b065dbdbc77af9f568387cd22b9ed27"
+REVISION = "4328560e33d622243b68e8e1bb0766180fd954e5"
 
 
 def run(args, **kwargs):
@@ -96,6 +97,11 @@ def main():
     lifecycle = ("#include <sys/resource.h>\n#include <fcntl.h>\n#include <errno.h>\n" + lifecycle)
     lifecycle = lifecycle.replace("int main() {", "int main() {\n    alarm(90);")
     lifecycle = lifecycle.replace("assert(fds_after <= fds_before + 1);", "assert(fds_after == fds_before);")
+    # Upstream's stale-session cases expect premature encrypted frames to be tolerated; our overlay rejects them.
+    start = lifecycle.index("// What a phone still in an earlier session")
+    end = lifecycle.index("int main()", start)
+    lifecycle = lifecycle[:start] + lifecycle[end:]
+    lifecycle = lifecycle.replace("    testOutcomes();\n", "")
     lifecycle = lifecycle.replace("static volatile int g_ended = 0;", '''static int g_ended = 0;
 static pthread_mutex_t ended_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int endedAdd(int value) {
@@ -106,15 +112,33 @@ static int endedAdd(int value) {
     return previous;
 }''')
     lifecycle = re.sub(r"__sync_fetch_and_add\(&g_ended, ([01])\)", r"endedAdd(\1)", lifecycle)
+    lifecycle = lifecycle.replace("static volatile int g_stopPosting = 0;", '''static int g_stopPosting = 0;
+static pthread_mutex_t posting_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int postingAdd(int value) {
+    pthread_mutex_lock(&posting_mutex);
+    int previous = g_stopPosting;
+    g_stopPosting += value;
+    pthread_mutex_unlock(&posting_mutex);
+    return previous;
+}''')
+    lifecycle = re.sub(r"__sync_fetch_and_add\(&g_stopPosting, ([01])\)", r"postingAdd(\1)", lifecycle)
     files[lifecycle_path] = lifecycle.encode()
-    files["reference/src/aa_cryptor.hpp"] = (ROOT / "src/android_auto/aa_cryptor.hpp").read_bytes()
-    files["reference/src/aa_cryptor.cpp"] = (ROOT / "src/android_auto/aa_cryptor_mbedtls.cpp").read_bytes()
-    session_path = "reference/src/aa_session.cpp"
-    files[session_path] = harden_session(files[session_path].decode().replace("\r\n", "\n")).encode()
+    with tempfile.TemporaryDirectory() as tmp:
+        prepared = Path(tmp) / "reference.tar"
+        target = Archive(prepared)
+        try:
+            add_nbt_aad(target, reference)
+        finally:
+            target.close()
+        with tarfile.open(prepared) as archive:
+            for item in archive:
+                if item.isfile():
+                    files[item.name] = archive.extractfile(item).read()
     files["test_tls_memory.c"] = (ROOT / "src/android_auto/test_tls_memory.c").read_bytes()
     files["test_session_protocol.cpp"] = (ROOT / "src/android_auto/test_session_protocol.cpp").read_bytes()
     for name in ['tls_usb_probe.h', 'tls_usb_probe.cpp', 'test_tls_usb_probe.cpp', 'oneplus_aoa.c',
-                 'aa_video_capture.h', 'aa_video_capture.cpp', 'test_video_capture.cpp']:
+                 'aa_video_capture.h', 'aa_video_capture.cpp', 'aa_media_out.hpp', 'aa_media_out.cpp',
+                 'aa_mic.hpp', 'aa_mic.cpp', 'test_video_capture.cpp', 'test_video_acks.cpp']:
         files[name] = (ROOT / 'src/android_auto' / name).read_bytes()
     cxx = "qcc -V4.4.2,gcc_ntox86_cpp -lang-c++ -O1 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -Imbedtls-3.6.7/include -Ireference/src -Ireference/include"
     libs = "lib/libmbedtls.a lib/libmbedx509.a lib/libmbedcrypto.a -lsocket -lm"
@@ -130,9 +154,11 @@ static int endedAdd(int value) {
                  "./test_session",
                  cxx + " test_session_protocol.cpp libnbt_aa_core.a " + libs + " -o test_protocol",
                  "./test_protocol",
+                 cxx + " test_video_acks.cpp libnbt_aa_core.a " + libs + " -o test_video_acks",
+                 "./test_video_acks",
                  cxx + " test_tls_usb_probe.cpp tls_usb_probe.cpp reference/src/aa_cryptor.cpp " + libs + " -o test_tls_usb_probe",
                  "./test_tls_usb_probe",
-                 cxx + " test_video_capture.cpp aa_video_capture.cpp libnbt_aa_core.a " + libs + " -o test_video_capture",
+                 cxx + " test_video_capture.cpp aa_video_capture.cpp aa_media_out.cpp aa_mic.cpp libnbt_aa_core.a " + libs + " -o test_video_capture",
                  "./test_video_capture",
                  "qcc -V4.4.2,gcc_ntox86 -Wall -Wextra -DNBT_AA_TLS_HANDSHAKE -c oneplus_aoa.c -o oneplus_aoa.o",
                  cxx + " tls_usb_probe.cpp reference/src/aa_cryptor.cpp oneplus_aoa.o " + libs + " -lusbdi -o oneplus_tls",
@@ -140,7 +166,7 @@ static int endedAdd(int value) {
                  "if ./oneplus_tls --tls-handshake 0 2; then exit 1; else test $? -eq 3; fi",
                  "if ./oneplus_tls --discover 0 2; then exit 1; else test $? -eq 3; fi",
                  "qcc -V4.4.2,gcc_ntox86 -Wall -Wextra -DNBT_AA_TLS_HANDSHAKE -DNBT_AA_CAPTURE -c oneplus_aoa.c -o oneplus_capture.o",
-                 cxx + " aa_video_capture.cpp tls_usb_probe.cpp oneplus_capture.o libnbt_aa_core.a " + libs + " -lusbdi -o oneplus_capture",
+                 cxx + " aa_video_capture.cpp aa_media_out.cpp aa_mic.cpp tls_usb_probe.cpp oneplus_capture.o libnbt_aa_core.a " + libs + " -lusbdi -o oneplus_capture",
                  "./oneplus_capture --selftest",
                  "if ./oneplus_capture --capture-video 0 2; then exit 1; else test $? -eq 3; fi",
                  "echo AA_SESSION_VM_TEST_OK"]
@@ -176,7 +202,8 @@ static int endedAdd(int value) {
     (out / "build-test.log").write_text(log, encoding="utf-8")
     passed = (result.returncode == 0 and "AA_MBEDTLS_BACKEND_OK" in log and
               "AA_TLS_PIN_OK" in log and "AA_TLS_USB_ADAPTER_OK" in log and
-              "AA_PROTOCOL_SIMULATOR_OK" in log and "AA_VIDEO_CAPTURE_SIMULATOR_OK" in log and "AA_SESSION_VM_TEST_OK" in log)
+              "AA_PROTOCOL_SIMULATOR_OK" in log and "AA_VIDEO_CAPTURE_SIMULATOR_OK" in log and
+              "AA_VIDEO_ACKS_OK" in log and "AA_SESSION_VM_TEST_OK" in log)
     summary = {"passed": passed, "ssh_exit": result.returncode, "remote": remote,
                "backend_passed": "AA_MBEDTLS_BACKEND_OK" in log,
                "lifecycle": re.findall(r"^cycles=.*$", log, re.M),
@@ -184,7 +211,7 @@ static int endedAdd(int value) {
                "vehicle_tested": False, "real_phone_handshake_tested": False}
     if passed:
         summary["artifacts_sha256"] = {}
-        for name in ["test_backend", "test_session", "test_protocol", "test_tls_usb_probe", "test_video_capture", "oneplus_capture", "oneplus_tls", "libnbt_aa_core.a"]:
+        for name in ["test_backend", "test_session", "test_protocol", "test_video_acks", "test_tls_usb_probe", "test_video_capture", "oneplus_capture", "oneplus_tls", "libnbt_aa_core.a"]:
             run(["scp", "-O", *opts, "qnx-build:" + remote + "/" + name, str(out / name)], timeout=30)
             data = (out / name).read_bytes()
             if not name.endswith(".a") and (data[:6] != b"\x7fELF\x01\x01" or data[18:20] != b"\x03\x00"):

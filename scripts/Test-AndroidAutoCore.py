@@ -17,7 +17,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "41975f269b065dbdbc77af9f568387cd22b9ed27"
+REVISION = "4328560e33d622243b68e8e1bb0766180fd954e5"
 TESTS = {
     "test_sdr": ["src/sdr_builder.cpp"],
     "test_sdr_drop": ["src/sdr_builder.cpp"],

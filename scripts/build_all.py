@@ -1,7 +1,7 @@
 """Build every program of the installed package from this repository in the QNX 6.5.0 VM.
 
 What it does:
-  1. checks the NBT-AAD checkout (must be commit 41975f2, unmodified)
+  1. checks the NBT-AAD checkout (must be commit 4328560, unmodified)
   2. downloads Mbed TLS 3.6.7 once (SHA-256 checked, cached in .local/), applies the legacy-UTCTime patch and the
      QNX configuration; clones FFmpeg n2.8.22 once into .local/ for nbt_decoder (files SHA-256 checked, see
      scripts/ffmpeg_qnx.py) and assembles its assembly with yasm 1.3.0 (downloaded once on Windows); clones lwIP
@@ -16,7 +16,7 @@ What it does:
 Requirements: Python 3.8+, git, OpenSSH (ssh/scp) to the VM, the VM user must not be root.
 Example:
   git clone https://github.com/Sq00ky/Supra-iDrive6-Android-Auto .local/reference-nbt-aad
-  git -C .local/reference-nbt-aad checkout 41975f269b065dbdbc77af9f568387cd22b9ed27
+  git -C .local/reference-nbt-aad checkout 4328560e33d622243b68e8e1bb0766180fd954e5
   python scripts/build_all.py --host qnx-build --hmi-libs /home/nbtbuild/hmi-libs --compare installer/payload
 """
 import argparse
@@ -39,7 +39,7 @@ from mbedtls_legacy_time import patch_x509
 from mbedtls_empty_name import patch_x509_empty_name
 
 ROOT = Path(__file__).resolve().parents[1]
-NBT_AAD_REVISION = "41975f269b065dbdbc77af9f568387cd22b9ed27"
+NBT_AAD_REVISION = "4328560e33d622243b68e8e1bb0766180fd954e5"
 MBEDTLS_VERSION = "3.6.7"
 MBEDTLS_SHA256 = "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6"
 MBEDTLS_URL = ("https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-%s/mbedtls-%s.tar.bz2"
@@ -159,7 +159,7 @@ def main():
     parser.add_argument("--known-hosts", type=Path, default=ROOT / ".local/known_hosts")
     parser.add_argument("--identity", type=Path, help="ssh private key for the VM (if not set in the ssh config)")
     parser.add_argument("--nbt-aad", type=Path, default=ROOT / ".local/reference-nbt-aad",
-                        help="NBT-AAD checkout at commit 41975f2")
+                        help="NBT-AAD checkout at commit 4328560")
     parser.add_argument("--hmi-libs", default="$HOME/.nbt-build/hmi-libs",
                         help="folder IN THE VM with libAppFramework.A.so and libCoreFramework.A.so from your NBT")
     parser.add_argument("--compare", type=Path, help="installer payload folder to compare with (e.g. installer/payload)")

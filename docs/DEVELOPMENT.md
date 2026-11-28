@@ -65,7 +65,7 @@ Which program is built from which files: [src/README.md](../src/README.md).
 
    ```sh
    git clone https://github.com/Sq00ky/Supra-iDrive6-Android-Auto .local/reference-nbt-aad
-   git -C .local/reference-nbt-aad checkout 41975f269b065dbdbc77af9f568387cd22b9ed27
+   git -C .local/reference-nbt-aad checkout 4328560e33d622243b68e8e1bb0766180fd954e5
    ```
 
    Keep this checkout unmodified; the build applies our changes to a copy.
