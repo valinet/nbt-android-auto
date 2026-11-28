@@ -159,7 +159,14 @@ const unsigned kEvPoolFirst=200, kEvPoolCount=500, kEvPoolUses=10;   // 500 (use
 // text ids in NbtAndroidAuto_ALL_Texts.zip (make_aa_entry_resources.py)
 enum { kTxtConnectUsb=2, kTxtNoPhone=3, kTxtStarting=4, kTxtRunning=5, kTxtReplug=6, kTxtUnsupported=7,
        kTxtServiceDown=8, kTxtSeveral=9, kTxt169=11, kTxtWide=12, kTxt169On=16, kTxtWideOn=17,
-       kTxtReboot=46, kTxtUseAny=47, kTxtUseCarPlay=48, kTxtUseAndroid=49 };
+       kTxtReboot=46, kTxtUseAny=47, kTxtUseCarPlay=48, kTxtUseAndroid=49,
+       kTxtTitleAny=1, kTxtTitleCarPlay=57, kTxtTitleAndroid=58,
+       kTxtListenAny=59, kTxtListenCarPlay=60, kTxtListenAndroid=61 };
+// By the phone that is connected (user 2026-11-28): the page titles (model 759, TargetPoll) and the "Listen to ..."
+// checkbox (model 757, showModels). Not the Multimedia entry (model 3, stays "CarPlay & Android Auto"): with the entry
+// button's model changed at run time, iDrive ignored every focus event of ours after a boot until the app had been
+// entered by hand (car 2026-11-28: start at boot, long BACK).
+const unsigned kTitleModel=759, kListenTextModel=757;
 void touch(const char* path) { int fd=open(path,O_WRONLY|O_CREAT|O_TRUNC,0644); if(fd>=0)close(fd); }
 // --- automatic start of the Android Auto service (boot.sh of the persistent package), like the NBT-AAD reference:
 // QNX spawn() into a new process group, no zombie, stdin/out/err /dev/null. Rate-limited to one start per 30 s.
@@ -442,7 +449,7 @@ public:
     bmw::PluginApp* app;
     bool stopping, polling, statusFocused, running;
     unsigned focusMask, visibleMask, menuMask;   // menuMask: our menu pages with the focus (1 menu, 2 settings, 4 advanced, 8 reset)
-    unsigned shownText, shownUse; int shownBox[kBoxCount], shownListen, shownListenEnabled;
+    unsigned shownText, shownUse, shownListenText, shownTitle; int shownBox[kBoxCount], shownListen, shownListenEnabled;
     long window; unsigned holds, ignoredHolds; long lastSideHold, lastAutoHold; long long lastSideHoldMs, lastHoldMs, lastFocusMs, lastBoxMs;
     Checker checker;
     Verifier verifier;
@@ -451,7 +458,7 @@ public:
     KeyWatch keyWatch;
     HoldSlot slots[kHoldCount];
     Entry():app(0),stopping(false),polling(false),statusFocused(false),running(false),focusMask(0),visibleMask(0),menuMask(0),
-            shownText(0),shownUse(0),shownListen(-1),shownListenEnabled(-1),window(0),holds(0),ignoredHolds(0),lastSideHold(0),lastAutoHold(0),lastSideHoldMs(-100000),lastHoldMs(-100000),lastFocusMs(0),lastBoxMs(-100000),showUntilMs(0),showRetryAtMs(0),evIdx(kEvPoolCount-1),evUses(kEvPoolUses),evIgnoredSeen(0) {
+            shownText(0),shownUse(0),shownListenText(0),shownTitle(0),shownListen(-1),shownListenEnabled(-1),window(0),holds(0),ignoredHolds(0),lastSideHold(0),lastAutoHold(0),lastSideHoldMs(-100000),lastHoldMs(-100000),lastFocusMs(0),lastBoxMs(-100000),showUntilMs(0),showRetryAtMs(0),evIdx(kEvPoolCount-1),evUses(kEvPoolUses),evIgnoredSeen(0) {
         checker.e=this; verifier.e=this; target.e=this; keyWatch.e=this;
         for(unsigned i=0;i<kHoldCount;++i){slots[i].e=this;slots[i].idx=i;}
         for(int i=0;i<kBoxCount;++i){shownBox[i]=-1;boxSlots[i].e=this;boxSlots[i].i=i;}
@@ -498,9 +505,11 @@ public:
     }
     // the menu pages' models: each only when it changed
     void showModels(bool force) {
-        if(force){shownUse=0;shownListen=shownListenEnabled=-1;for(int i=0;i<kBoxCount;++i)shownBox[i]=-1;}
+        if(force){shownUse=shownListenText=0;shownListen=shownListenEnabled=-1;for(int i=0;i<kBoxCount;++i)shownBox[i]=-1;}
         const unsigned use=g_phoneKind==2?kTxtUseCarPlay:g_phoneKind==1?kTxtUseAndroid:kTxtUseAny;
         if(use!=shownUse){bmw::TextID tu(use);app->updateModel(kUseModel,tu);shownUse=use;}
+        const unsigned lt=g_phoneKind==2?kTxtListenCarPlay:g_phoneKind==1?kTxtListenAndroid:kTxtListenAny;
+        if(lt!=shownListenText){bmw::TextID tl(lt);app->updateModel(kListenTextModel,tl);shownListenText=lt;}
         for(int i=0;i<kBoxCount;++i){
             const int v=flagSet(kBoxes[i].flag)==kBoxes[i].tickedWhenSet?1:0;
             if(v!=shownBox[i]){app->updateModel(kBoxes[i].model,v!=0);shownBox[i]=v;}
@@ -672,6 +681,10 @@ void TargetPoll::run() {
     if(!app||!e||e->stopping){active=false;return;}
     bool running=false;
     readStatus(&running);
+    {
+        const unsigned title=g_phoneKind==2?kTxtTitleCarPlay:g_phoneKind==1?kTxtTitleAndroid:kTxtTitleAny;
+        if(title!=e->shownTitle){bmw::TextID tt(title);app->updateModel(kTitleModel,tt);e->shownTitle=title;}
+    }
     const int want=running?(int)(kHoldState+kHoldCount-1):(int)kStatusState;
     if(want!=target){app->updateModel(kTargetModel,want);target=want;plog("entry target ->",want);}
     {   // iDrive's call screens (see kCall)

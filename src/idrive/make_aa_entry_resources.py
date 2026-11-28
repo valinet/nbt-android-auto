@@ -71,6 +71,11 @@ GERMAN = {
     54: 'Ja',
     55: 'Nein',
     56: 'Neustart',
+    57: 'CarPlay',
+    58: 'Android Auto',
+    59: 'Audio hoeren',
+    60: 'CarPlay hoeren',
+    61: 'Android Auto hoeren',
 }
 ENGLISH = {
     1: 'CarPlay & Android Auto',
@@ -129,6 +134,11 @@ ENGLISH = {
     54: 'Yes',
     55: 'No',
     56: 'Reboot',
+    57: 'CarPlay',
+    58: 'Android Auto',
+    59: 'Listen to audio',
+    60: 'Listen to CarPlay',
+    61: 'Listen to Android Auto',
 }
 languages = ['de', 'en-UK', 'en-US', 'es-US', 'es-ES', 'fr-FR', 'fr-CA', 'it', 'pt', 'ru']
 with zipfile.ZipFile(output / 'NbtAndroidAuto_ALL_Texts.zip', 'w', zipfile.ZIP_DEFLATED) as archive:

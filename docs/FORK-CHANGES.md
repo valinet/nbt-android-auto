@@ -163,14 +163,14 @@ The phone's playing / paused state comes from the session: a small NBT-AAD core 
 
 ## iDrive menu (2026-11-27)
 
-Multimedia -> **CarPlay & Android Auto** always opens the menu. Settings are flag files in the package
+Multimedia -> **CarPlay & Android Auto** always opens the menu (the page titles read **CarPlay** or **Android Auto** while such a phone is connected; the entry itself keeps its name: changed at run time, it broke start at boot). Settings are flag files in the package
 (`/var/opt/hmi/data/rw/NbtAndroidAutoRT`); `*` = applies after a reboot, everything else at once.
 
 | Item | Flag | Default | Read by |
 |---|---|---|---|
 | Use CarPlay / Use Android Auto | - | - | the picture if a session runs, else the status page, which asks for the phone |
 | Connect automatically | `gate-on` when unticked | ticked | native_service before every connection; nbt_knob (bring the first session of a boot to the front) |
-| Listen to audio | - (`/fs/ram3/nbt-aa-listen`) | - | nbt_knob: the source to Android Auto's / CarPlay's and play; ticked while that is the source, greyed out without a session |
+| Listen to audio (Listen to CarPlay / Android Auto with such a phone) | - (`/fs/ram3/nbt-aa-listen`) | - | nbt_knob: the source to Android Auto's / CarPlay's and play; ticked while that is the source, greyed out without a session |
 | Settings > Display as full screen * | `split800` when unticked | ticked | boot.sh |
 | Settings > Show using NAV button | `nav-off` when unticked | ticked | nbt_knob, every NAV press |
 | Settings > Open widget automatically | `panel-at-start` | unticked | nbt_decoder, every session start |

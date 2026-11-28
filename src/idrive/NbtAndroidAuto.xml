@@ -44,6 +44,11 @@
       <textIdModel id="754" textId="53" preinst="false"/>
       <textIdModel id="755" textId="54" preinst="false"/>
       <textIdModel id="756" textId="55" preinst="false"/>
+      <!-- "Listen to audio" / "Listen to CarPlay" / "Listen to Android Auto": by the phone's kind (plugin) -->
+      <textIdModel id="757" textId="59" preinst="false"/>
+      <!-- the page titles: "CarPlay & Android Auto" / "CarPlay" / "Android Auto" by the phone (plugin). Not the entry
+           button's model 3, which stays as it is: start at boot broke with model 3 changed at run time (car 2026-11-28) -->
+      <textIdModel id="759" textId="1" preinst="false"/>
       <textIdModel id="82" textId="56" preinst="false"/>
       <textIdModel id="83" textId="22" preinst="false"/>
       <textIdModel id="84" textId="23" preinst="false"/>
@@ -588,17 +593,17 @@
       <focusEvent id="779" target="40"/>
     </events>
     <hmiStates>
-      <hmiState id="10" textModel="3" text="CarPlay &amp; Android Auto">
+      <hmiState id="10" textModel="759" text="CarPlay &amp; Android Auto">
         <components>
           <button id="801" action="701" model="750" text="Use CarPlay or Android Auto"/>
           <checkbox id="802" action="702" model="790" text="Connect automatically"/>
-          <checkbox id="803" action="703" model="791" text="Listen to audio"/>
+          <checkbox id="803" action="703" model="791" textModel="757" text="Listen to audio"/>
           <button id="804" action="704" model="751" text="Settings"/>
         </components>
       </hmiState>
       <!-- "Use ..." without a session: the status line; the plugin asks native_service for the phone and moves on to 13
            when the session runs -->
-      <hmiState id="14" parentId="10" textModel="3" text="CarPlay &amp; Android Auto">
+      <hmiState id="14" parentId="10" textModel="759" text="CarPlay &amp; Android Auto">
         <components>
           <label id="811" model="4" text="Connect phone via USB"><properties><property id="2" value="false"/></properties></label>
         </components>
