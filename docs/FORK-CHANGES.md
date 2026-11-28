@@ -41,7 +41,8 @@ screen.
 
 | Input | Behaviour now |
 | --- | --- |
-| Tilts, BACK | Go to the phone only: the hold state is iDrive's TerminalUI page in full screen (2026-11-28), which keeps them from iDrive (the earlier tilt right / BACK tricks sent to iDrive are gone) |
+| Tilts | Go to the phone only: the hold state is iDrive's TerminalUI page in full screen (2026-11-28), which keeps them from iDrive (the earlier tilt right / BACK tricks sent to iDrive are gone) |
+| BACK | Short press: the phone (sent on the release). Held 700 ms (`NBT_BACK_LONG_MS`): iDrive's BACK; the picture hides, the page goes back to normal view and nbt_knob sends BACK to iDrive again |
 | NAV | Brings Android Auto to the front (`NBT_NAV_OPENS_AA`) |
 | NAV in Android Auto | Android Auto audio: source not AUX → switch to AUX and start playback if the phone is not playing; source AUX → play / pause (`NBT_NAV_AUDIO`) |
 | MENU, COM, MEDIA, OPTION | Hide the picture at once and stay with iDrive |

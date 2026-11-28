@@ -89,6 +89,12 @@ const char* const kLeave="/fs/ram3/nbt-aa-leave";
 // false -> changeToNormalView). Set on every focus of state 13. Its raAction (726) is what the state sends for the
 // controller events it takes (onViewEvent / mapKeyCodeToA4AParam): only counted and logged for now.
 const unsigned kTuiFullscreenProperty=13, kTuiAction=726;
+// In full screen the state also keeps MENU and BACK from iDrive (car 2026-11-28; OPTION, COM, MEDIA, NAV, MAP still
+// reach it). On a long BACK (a short one goes to the phone), nbt_knob writes kTuiKey; KeyWatch (every 100 ms
+// while the hold state has the focus) then sets the property back to false (changeToNormalView: iDrive gets its keys
+// again) and answers with kRekey, on which nbt_knob sends that key to iDrive once more.
+const char* const kTuiKey="/fs/ram3/nbt-aa-tuikey";
+const char* const kRekey="/fs/ram3/nbt-aa-rekey";
 const unsigned kEntryState=10, kHoldState=13, kEvHold=52, kFocus=1, kVisible=11, kStatusModel=4;
 // --- the menu (user 2026-11-27): Multimedia -> "CarPlay & Android Auto" always opens page 10:
 //   "Use CarPlay / Use Android Auto" (button 801, model 750: by the phone's kind) -> hold state 13 while a session runs,
@@ -256,6 +262,13 @@ public:
     void run();
 };
 struct HoldSlot { Entry* e; unsigned idx; };
+class KeyWatch : public bmw::Runnable {
+public:
+    Entry* e; bool pending;
+    KeyWatch():e(0),pending(false) {}
+    void start();
+    void run();
+};
 // back to page 40 after "Reset values" (Yes or No): one of kEvSettingsCount focus events, each used 10 times (iDrive
 // performs a focus event at most 11 times per HMI start, see kEvPoolFirst)
 class BackToSettings : public bmw::Runnable {
@@ -435,10 +448,11 @@ public:
     Verifier verifier;
     BackToSettings back;
     TargetPoll target;
+    KeyWatch keyWatch;
     HoldSlot slots[kHoldCount];
     Entry():app(0),stopping(false),polling(false),statusFocused(false),running(false),focusMask(0),visibleMask(0),menuMask(0),
             shownText(0),shownUse(0),shownListen(-1),shownListenEnabled(-1),window(0),holds(0),ignoredHolds(0),lastSideHold(0),lastAutoHold(0),lastSideHoldMs(-100000),lastHoldMs(-100000),lastFocusMs(0),lastBoxMs(-100000),showUntilMs(0),showRetryAtMs(0),evIdx(kEvPoolCount-1),evUses(kEvPoolUses),evIgnoredSeen(0) {
-        checker.e=this; verifier.e=this; target.e=this;
+        checker.e=this; verifier.e=this; target.e=this; keyWatch.e=this;
         for(unsigned i=0;i<kHoldCount;++i){slots[i].e=this;slots[i].idx=i;}
         for(int i=0;i<kBoxCount;++i){shownBox[i]=-1;boxSlots[i].e=this;boxSlots[i].i=i;}
     }
@@ -618,6 +632,8 @@ public:
             static bmw::Parcel* on=new bmw::Parcel(true);
             e->app->setProperty(kHoldState,kTuiFullscreenProperty,*on);
             plog("TerminalUI: fullscreen property set on the hold state",(int)kHoldState);
+            unlink(kTuiKey);   // a key from before this focus does not count
+            e->keyWatch.start();
         }
         else {
             if(access(kHidden,F_OK)!=0)g_aaLeftMs=now_ms();   // lost the focus with the picture on screen
@@ -713,6 +729,19 @@ void TargetPoll::run() {
     }
     app->post(this,250);   // 250 ms: show requests (NAV key, parking assistant) take effect quickly
 }
+void KeyWatch::start() { if(!pending&&e&&e->app&&!e->stopping){pending=true;e->app->post(this,100);} }
+void KeyWatch::run() {
+    pending=false;
+    if(!e||e->stopping||!e->app||!e->holdFocused())return;
+    if(unlink(kTuiKey)==0){
+        static bmw::Parcel* off=new bmw::Parcel(false);
+        e->app->setProperty(kHoldState,kTuiFullscreenProperty,*off);
+        touch(kRekey);
+        plog("TerminalUI: a long BACK, normal view, nbt_knob sends the key again",0);
+    }
+    start();
+}
+
 void Checker::run() {
     pending=false;
     if(!e||e->stopping||!e->app||e->holdFocused())return;    // BACK only climbed one hold level: nothing to do

@@ -1131,10 +1131,67 @@ void favouritesIfNeeded(nbt::most::Client& most) {
 // controller key seen yet, the addresses of the periodic C06 (every 2 s) are used, as for the favourite buttons.
 // The first controller message after an HMI start is dropped by iDrive (HmiMain3D onCCSPushButton: it only marks the
 // controller "alive"), and so is any with counter ff: one ff message goes first while the controller is silent.
+void sendHmiKey(nbt::most::Client& most, uint8_t bit, const char* what);
 void sendNavIfPending(nbt::most::Client& most) {
     pthread_mutex_lock(&g_backMx);
     if (!g_navKeyPending) { pthread_mutex_unlock(&g_backMx); return; }
     g_navKeyPending = false;
+    pthread_mutex_unlock(&g_backMx);
+    sendHmiKey(most, 0x20, "NAV");
+}
+
+// --- a long BACK on the TerminalUI hold state (2026-11-28) ---
+// The hold state is a TerminalUI page in full screen (aa_entry_plugin): iDrive gives it the controller (HmiMain3D
+// CTerminalUIState::changeToFullscreeenView registers its view events, changeToNormalView unregisters them). Of the
+// hard keys, MENU and BACK no longer reached iDrive (car 2026-11-28; OPTION, COM, MEDIA, NAV, MAP still do).
+//   BACK: a short press goes to the phone (sent on the release, press + release), a long one (NBT_BACK_LONG_MS, default
+//   700 ms) goes to iDrive instead: the picture hides (nbt-aa-leave, nbt-aa-hidden) and BACK is remembered (user
+//   2026-11-28; car 2026-11-28: works).
+//   MENU: only the picture hides and the page is left, as before. Sending it again the same way as BACK did not work
+//   (car 2026-11-28) and was dropped: still open.
+// For a remembered key nbt_knob writes /fs/ram3/nbt-aa-tuikey; the plugin then puts the page back to normal view and
+// answers with /fs/ram3/nbt-aa-rekey, on which the same key is sent to iDrive (within 3 s), which acts on it as usual.
+uint8_t g_rekeyBit = 0;          // under g_backMx: the hard key's sensor bit (BACK 02)
+const char* g_rekeyName = "";
+long long g_rekeyAt = 0;
+unsigned g_backLongMs = 700;
+bool g_backHeld = false;         // under g_backMx: the driver's BACK is down on the Android Auto page, not sent yet
+bool g_backLong = false;         // ... and held long enough: it is iDrive's
+long long g_backDownMs = 0;
+
+void leaveForIdrive(uint8_t bit, const char* name) {   // with g_backMx held
+    g_rekeyBit = bit; g_rekeyName = name; g_rekeyAt = nowMs();
+    int fd = open("/fs/ram3/nbt-aa-leave", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) close(fd);
+    fd = open("/fs/ram3/nbt-aa-hidden", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) close(fd);
+    fd = open("/fs/ram3/nbt-aa-tuikey", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) close(fd);
+}
+
+// main thread, every loop: a BACK held long enough becomes iDrive's; the plugin's answer -> the key to iDrive
+void tuiKeysIfNeeded(nbt::most::Client& most) {
+    pthread_mutex_lock(&g_backMx);
+    if (g_backHeld && !g_backLong && nowMs() - g_backDownMs >= (long long)g_backLongMs) {
+        g_backLong = true;
+        leaveForIdrive(0x02, "BACK");
+        pthread_mutex_unlock(&g_backMx);
+        printf("[Knob] BACK held %u ms: for iDrive, leave Android Auto\n", g_backLongMs);
+    } else pthread_mutex_unlock(&g_backMx);
+    if (unlink("/fs/ram3/nbt-aa-rekey") != 0) return;
+    pthread_mutex_lock(&g_backMx);
+    const uint8_t bit = g_rekeyBit;
+    const char* const name = g_rekeyName;
+    const bool fresh = bit && nowMs() - g_rekeyAt < 3000;
+    g_rekeyBit = 0;
+    pthread_mutex_unlock(&g_backMx);
+    if (!fresh) { printf("[Knob] rekey asked, but no key for iDrive in the last 3 s\n"); return; }
+    sendHmiKey(most, bit, name);
+}
+
+// main thread: one hard key press + release to iDrive, as the controller sends it
+void sendHmiKey(nbt::most::Client& most, uint8_t bit, const char* what) {
+    pthread_mutex_lock(&g_backMx);
     uint16_t src = g_ccsSrc, dst = g_ccsDst;
     const char* from = "last controller key";
     if (!src || !dst) {
@@ -1145,20 +1202,39 @@ void sendNavIfPending(nbt::most::Client& most) {
     const uint8_t c1 = nextCounter(g_ccsCounter), c2 = nextCounter(c1);
     g_ccsCounter = c2;
     g_ownC20Until = nowMs() + 1000;
-    g_ownNavUntil = nowMs() + 1500;
+    if (bit == 0x20) g_ownNavUntil = nowMs() + 1500;
     pthread_mutex_unlock(&g_backMx);
-    printf("[Knob] NAV to iDrive for the HMI plugin (%04X->%04X from the %s, counters %02x %02x%s)\n", src, dst, from,
+    printf("[Knob] %s to iDrive for the HMI plugin (%04X->%04X from the %s, counters %02x %02x%s)\n", what, src, dst, from,
            c1, c2, known ? "" : ", controller silent since boot: ff first");
     if (!known) { most.send(rebaseMsg(src, dst)); usleep(100000); }
-    most.send(hardKeyMsg(src, dst, c1, true, 0x20));
+    most.send(hardKeyMsg(src, dst, c1, true, bit));
     usleep(100000);
-    most.send(hardKeyMsg(src, dst, c2, false, 0x20));
+    most.send(hardKeyMsg(src, dst, c2, false, bit));
 }
 
 
 void onKnob(const nbt::car::CcsEvent& ev, void*) {
     char line[48];
     int n;
+    // BACK on the Android Auto page: short -> the phone (on the release), long -> iDrive (tuiKeysIfNeeded)
+    if (ev.keycode == nbt::AAK_BACK && ev.kind == 1) {
+        pthread_mutex_lock(&g_backMx);
+        if (ev.down && !ev.cancel && access("/fs/ram3/nbt-aa-hidden", F_OK) != 0) {
+            g_backHeld = true; g_backLong = false; g_backDownMs = nowMs();
+            pthread_mutex_unlock(&g_backMx);
+            return;
+        }
+        if (!ev.down && g_backHeld) {
+            const bool wasLong = g_backLong;
+            g_backHeld = false;
+            pthread_mutex_unlock(&g_backMx);
+            if (wasLong || ev.cancel) return;
+            wheelKeyLine(nbt::AAK_BACK, 1, "BACK (short)");
+            wheelKeyLine(nbt::AAK_BACK, 0, "BACK (short)");
+            return;
+        }
+        pthread_mutex_unlock(&g_backMx);
+    }
     // NAV opens Android Auto (user 2026-11-17): iDrive still gets the key and opens its navigation, the show request
     // (HMI plugin, checked every 250 ms) brings Android Auto back over it. NBT_NAV_OPENS_AA=0: NAV stays with iDrive.
     // "Show using NAV button" unticked in the menu (2026-11-27): nav-off in the package, looked at on every press
@@ -1344,6 +1420,7 @@ int main(int argc, char** argv) {
     if (!most.addRoute(0x03, 0x00, 0x054, nbt::most::kAny, &onSourceResult, NULL)) printf("[Knob] no room for the remove result route\n");
     g_btAudio = wheelKey("NBT_BT_AUDIO", 1) != 0 && !trace;
     if (const char* v = getenv("NBT_BT_SEL_OFF")) if (*v) g_btSelOff = (unsigned)strtoul(v, 0, 16) & 0xFF;
+    g_backLongMs = wheelKey("NBT_BACK_LONG_MS", 700);
     if (const char* v = getenv("NBT_BT_SEL_ON")) if (*v) g_btSelOn = (unsigned)strtoul(v, 0, 16) & 0xFF;
     if (g_btAudio && !most.addRoute(0x54, 0x00, nbt::most::kAny, nbt::most::kAny, &onBtUnit, NULL)) {
         printf("[Knob] no room for the Bluetooth result route\n");
@@ -1413,6 +1490,7 @@ int main(int argc, char** argv) {
         playSwitchIfNeeded(most);
         navAudioIfNeeded(most);
         if (!trace) listenIfNeeded(most);
+        if (!trace) tuiKeysIfNeeded(most);
         if (!trace) { navLongIfNeeded(); wheelLongIfNeeded(); tripIfNeeded(most); }
         if (!trace) promptRouteIfNeeded(most);
         if (!trace) btAudioIfNeeded(most);
