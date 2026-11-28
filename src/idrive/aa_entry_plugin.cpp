@@ -173,12 +173,14 @@ enum { kTxtConnectUsb=2, kTxtNoPhone=3, kTxtStarting=4, kTxtRunning=5, kTxtReplu
        kTxtServiceDown=8, kTxtSeveral=9, kTxt169=11, kTxtWide=12, kTxt169On=16, kTxtWideOn=17,
        kTxtReboot=46, kTxtUseAny=47, kTxtUseCarPlay=48, kTxtUseAndroid=49,
        kTxtTitleAny=1, kTxtTitleCarPlay=57, kTxtTitleAndroid=58,
-       kTxtListenAny=59, kTxtListenCarPlay=60, kTxtListenAndroid=61 };
+       kTxtListenAny=59, kTxtListenCarPlay=60, kTxtListenAndroid=61,
+       kTxtSettings=50, kTxtSettingsCarPlay=62, kTxtSettingsAndroid=63 };
 // By the phone that is connected (user 2026-11-28): the page titles (model 759, TargetPoll) and the "Listen to ..."
 // checkbox (model 757, showModels). Not the Multimedia entry (model 3, stays "CarPlay & Android Auto"): with the entry
 // button's model changed at run time, iDrive ignored every focus event of ours after a boot until the app had been
 // entered by hand (car 2026-11-28: start at boot, long BACK).
 const unsigned kTitleModel=759, kListenTextModel=757;
+const unsigned kOptionSettingsModel=758;   // the OPTION panel's button: "CarPlay Settings" / "Android Auto Settings"
 void touch(const char* path) { int fd=open(path,O_WRONLY|O_CREAT|O_TRUNC,0644); if(fd>=0)close(fd); }
 // --- automatic start of the Android Auto service (boot.sh of the persistent package), like the NBT-AAD reference:
 // QNX spawn() into a new process group, no zombie, stdin/out/err /dev/null. Rate-limited to one start per 30 s.
@@ -722,7 +724,11 @@ void TargetPoll::run() {
     readStatus(&running);
     {
         const unsigned title=g_phoneKind==2?kTxtTitleCarPlay:g_phoneKind==1?kTxtTitleAndroid:kTxtTitleAny;
-        if(title!=e->shownTitle){bmw::TextID tt(title);app->updateModel(kTitleModel,tt);e->shownTitle=title;}
+        if(title!=e->shownTitle){
+            bmw::TextID tt(title);app->updateModel(kTitleModel,tt);e->shownTitle=title;
+            bmw::TextID ts(g_phoneKind==2?kTxtSettingsCarPlay:g_phoneKind==1?kTxtSettingsAndroid:kTxtSettings);
+            app->updateModel(kOptionSettingsModel,ts);
+        }
     }
     const int want=running?(int)(kHoldState+kHoldCount-1):(int)kStatusState;
     if(want!=target){app->updateModel(kTargetModel,want);target=want;plog("entry target ->",want);}

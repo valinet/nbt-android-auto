@@ -45,7 +45,7 @@ screen.
 | Tilts | Go to the phone only: the hold state is iDrive's TerminalUI page in full screen (2026-11-28), which keeps them from iDrive (the earlier tilt right / BACK tricks sent to iDrive are gone) |
 | BACK | Short press: the phone (sent on the release). Held 700 ms (`NBT_BACK_LONG_MS`): iDrive's BACK; the picture hides, the page goes back to normal view and nbt_knob sends BACK to iDrive again |
 | BACK held elsewhere | 700 ms: brings Android Auto / CarPlay to the front from any screen ("Hold BACK to show"; iDrive acts on BACK only on the release) |
-| OPTION | Hides the picture; iDrive opens the hold page's option panel ("CarPlay" / "Android Auto") with Settings, which also has "Connect automatically" and "Listen to ..."; BACK there goes back to the picture |
+| OPTION | Hides the picture; iDrive opens the hold page's option panel ("CarPlay" / "Android Auto") with "CarPlay Settings" / "Android Auto Settings" (plain "Settings" without a phone), which also has "Connect automatically" and "Listen to ..."; BACK there goes back to the picture |
 | MENU | Hides the picture; the full screen page keeps MENU from iDrive, so the page goes back to normal view and nbt_knob sends MENU to iDrive again once the driver's MENU is released |
 | COM, MEDIA, NAV | Hide the picture at once and stay with iDrive (NAV no longer brings Android Auto up, 2026-11-28: iDrive acts on the press, so a long NAV cannot be ours) |
 | Wheel roller | Up = PREVIOUS, down = NEXT (swapped 2026-11-28), push = PLAY_PAUSE, only while the source is AUX (`NBT_WHEEL_AUX_ONLY`; sent 300 ms after the release). Double push (within 300 ms, `NBT_PUSH_DOUBLE_MS`): the info overlay's next state (small: page 1, page 2, off; large: on, off) |

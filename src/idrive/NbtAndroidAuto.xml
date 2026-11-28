@@ -59,6 +59,8 @@
       <!-- the page titles: "CarPlay & Android Auto" / "CarPlay" / "Android Auto" by the phone (plugin). Not the entry
            button's model 3, which stays as it is: start at boot broke with model 3 changed at run time (car 2026-11-28) -->
       <textIdModel id="759" textId="1" preinst="false"/>
+      <!-- OPTION panel: "CarPlay Settings" / "Android Auto Settings" by the phone, "Settings" without one (plugin) -->
+      <textIdModel id="758" textId="50" preinst="false"/>
       <textIdModel id="82" textId="56" preinst="false"/>
       <textIdModel id="83" textId="22" preinst="false"/>
       <textIdModel id="84" textId="23" preinst="false"/>
@@ -676,7 +678,7 @@
         <!-- OPTION in Android Auto / CarPlay (user 2026-11-28): iDrive's option panel of this state (as hmiStates'
              optionComponents in BMW's RHMI layouts), only Settings: page 40, BACK there goes back to the picture -->
         <optionComponents>
-          <button id="829" action="704" model="751" text="Settings"/>
+          <button id="829" action="704" model="758" text="Settings"/>
         </optionComponents>
       </terminalUI>
     </hmiStates>
